@@ -13,6 +13,7 @@ GUJIA/
    ├─ fx_kine.py                     运动学计算接口
    ├─ KM_CAN.py                      CAN 电机与夹爪控制
    ├─ SkeletonCalibration.py         编码器零位/方向校准工具（独立运行）
+   ├─ CalibrationOfTheOrigin.py      舵机原点标定工具（图形界面，独立运行）
    ├─ footkeyboard.py                脚踏键盘测试脚本（独立运行）
    ├─ servo_config.ini               编码器零位/方向配置
    ├─ requirements.txt               Python 依赖
@@ -57,3 +58,13 @@ python gujiayaocao_0817_frontend.py
 - `libMarvinSDK` / `libKine` 为厂商提供的 SDK 动态库。
 - `camera_dataset/` 下的采集结果不纳入版本管理。
 - 编码器 ID 与关节的对应关系见 `servo_config.ini` 的 `[encoder_map]`，默认按 ID 1..16 顺序（A 臂 1–7、左夹爪 8、B 臂 9–15、右夹爪 16）；接线不同时按实际修改。
+
+## 舵机原点标定
+
+```bat
+python CalibrationOfTheOrigin.py
+```
+
+流程：连接编码器串口 → 逐个关节转到机械正限位点「记正限位」→ 转到负限位点「记负限位」→ 程序自动计算原点 → 人工「确认」→ 「导出结果」生成独立的 ini 文件。
+
+注意：`servo_config.ini` **只读**，标定程序不会修改它；导出文件需人工核对后再合并。
