@@ -150,6 +150,12 @@ def counts_to_deg(counts: float) -> float:
     return counts * 360.0 / ENCODER_RESOLUTION
 
 
+def relative_deg(counts: float, origin: float) -> float:
+    """相对原点的角度，归一化到 [-180, 180)。"""
+    offset = (counts - origin + ENCODER_RESOLUTION / 2.0) % ENCODER_RESOLUTION - ENCODER_RESOLUTION / 2.0
+    return counts_to_deg(offset)
+
+
 def unwrap_delta(new_raw: int, last_raw: int) -> int:
     """相邻两帧原始值之差，折算到最短方向（[-2048, 2048)），用于连续累计路径。"""
     delta = (new_raw - last_raw) % ENCODER_RESOLUTION
@@ -329,7 +335,7 @@ class CalibrationApp(tk.Tk):
         hint.pack(fill=tk.X)
         ttk.Label(
             hint,
-            text="记录时请让关节从一个限位连续移动到另一个限位；原点按实际运动路径的中点计算（支持超过 180°）。",
+            text="记录时请让关节从一个限位连续移动到另一个限位；记录后限位角度以标定原点为零点显示（支持超过 180°）。",
             foreground="#68717d",
         ).pack(side=tk.LEFT)
 
@@ -637,10 +643,13 @@ class CalibrationApp(tk.Tk):
     def _refresh_row(self, index: int):
         joint = self.joints[index]
         ui = self.row_ui[index]
-        # 限位按度数显示；原点保留原始计数，方便与 servo_config.ini 对照
-        fmt_deg = lambda value: "--" if value is None else f"{counts_to_deg(value):.1f}°"
-        ui["pos"].set(fmt_deg(joint.pos_limit))
-        ui["neg"].set(fmt_deg(joint.neg_limit))
+        # 原点已知后按“相对原点的角度”显示，便于和额定关节范围对照
+        if joint.origin is None:
+            fmt_limit = lambda value: "--" if value is None else f"{counts_to_deg(value):.1f}°"
+        else:
+            fmt_limit = lambda value: "--" if value is None else f"{relative_deg(value, joint.origin):+.1f}°"
+        ui["pos"].set(fmt_limit(joint.pos_limit))
+        ui["neg"].set(fmt_limit(joint.neg_limit))
         ui["origin"].set("--" if joint.origin is None else f"{joint.origin:.0f}")
 
         button_pos, button_neg, button_confirm = ui["buttons"]
@@ -736,10 +745,12 @@ class CalibrationApp(tk.Tk):
             origin_int = int(round(joint.origin)) % ENCODER_RESOLUTION
             lines.append(f"[{joint.sid}]")
             lines.append(f"zero_offset_raw = {origin_int}")
+            pos_rel = relative_deg(joint.pos_limit, joint.origin)
+            neg_rel = relative_deg(joint.neg_limit, joint.origin)
             lines.append(
                 f"# 关节={joint.label} "
-                f"正限位={joint.pos_limit:.0f}({counts_to_deg(joint.pos_limit):.1f}°) "
-                f"负限位={joint.neg_limit:.0f}({counts_to_deg(joint.neg_limit):.1f}°)"
+                f"正限位={joint.pos_limit:.0f}({pos_rel:+.1f}°) "
+                f"负限位={joint.neg_limit:.0f}({neg_rel:+.1f}°)"
             )
             lines.append("")
 
