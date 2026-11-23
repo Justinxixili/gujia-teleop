@@ -82,8 +82,8 @@ python CalibrationOfTheOrigin.py
 [right]
 closed_raw = 836   # 完全闭合时的编码器原始值
 open_raw = 652     # 完全张开时的编码器原始值
-target_closed = -0.15
-target_open = 1.1
+target_closed = 1.1
+target_open = -0.15
 ```
 
 - 没有配置或两端相同的夹爪会退回旧的 `abs(角度)/9` 归一化；
