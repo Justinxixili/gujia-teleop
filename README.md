@@ -356,7 +356,7 @@ python packaging/build_exe.py
 - `libMarvinSDK.dll` / `libKine.dll`
 - `使用说明.txt`
 
-同时生成 `SDK_PYTHON/GujiaTeleop_release.zip`。复制到其他 Windows 10/11 64 位电脑解压即可使用。
+同时生成 `release/GujiaTeleop_release.zip`（在 release 文件夹内）。复制到其他 Windows 10/11 64 位电脑解压即可使用。
 
 说明：
 

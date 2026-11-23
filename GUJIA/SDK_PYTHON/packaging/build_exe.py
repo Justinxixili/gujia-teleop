@@ -74,12 +74,19 @@ def copy_assets():
 
 
 def make_zip():
-    archive = os.path.join(SDK_DIR, "GujiaTeleop_release")
-    zip_path = archive + ".zip"
-    if os.path.exists(zip_path):
-        os.remove(zip_path)
-    shutil.make_archive(archive, "zip", RELEASE_DIR)
-    print("zip: " + zip_path)
+    # 先删除 release 里旧的 zip，避免新 zip 把旧 zip 一起打进去
+    for name in os.listdir(RELEASE_DIR):
+        if name.lower().endswith(".zip"):
+            os.remove(os.path.join(RELEASE_DIR, name))
+    # 先在 SDK_PYTHON 下生成，再移入 release
+    temp_base = os.path.join(SDK_DIR, "_release_tmp")
+    temp_zip = temp_base + ".zip"
+    if os.path.exists(temp_zip):
+        os.remove(temp_zip)
+    shutil.make_archive(temp_base, "zip", RELEASE_DIR)
+    target = os.path.join(RELEASE_DIR, "GujiaTeleop_release.zip")
+    shutil.move(temp_zip, target)
+    print("zip: " + target)
 
 
 def main():
