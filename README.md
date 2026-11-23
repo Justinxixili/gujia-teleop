@@ -17,6 +17,7 @@ GUJIA/
    ├─ footkeyboard.py                脚踏键盘测试脚本（独立运行）
    ├─ servo_config.ini               编码器零位/方向配置
    ├─ gripper_config.ini             夹爪张开/闭合端点映射
+   ├─ teleop_config.ini              摇操参数配置
    ├─ requirements.txt               Python 依赖
    ├─ libMarvinSDK.dll / .so         机器人控制动态库
    ├─ libKine.dll / .so              运动学动态库
@@ -89,4 +90,19 @@ target_open = -0.15
 - 没有配置或两端相同的夹爪会退回旧的 `abs(角度)/9` 归一化；
 - `servo_config.ini` 只读，夹爪端点单独放在这个文件里；
 - 若张开/闭合方向相反，互换 `target_closed` 与 `target_open` 即可。
+
+## 摇操参数配置（teleop_config.ini）
+
+摇操的全部可调参数集中在 `teleop_config.ini`：
+
+- `[robot]`：IP、起始/回 Home 点位、起始误差、骨架对齐误差、重新对齐阈值
+- `[encoder]`：串口（留空自动）、波特率、读取频率、滤波系数、分辨率
+- `[control]`：主循环周期、对齐状态刷新间隔、控制台打印间隔、插值步长、速度前馈频率
+- `[gripper]`：夹爪使能、CAN ID、MIT 参数、机械限位、指令/反馈频率
+- `[impedance]`：关节阻抗 K/D
+- `[tool]`：工具负载偏移与动力学参数
+
+环境变量 `GUJIAYAOCAO_*` 优先级高于配置文件（前端界面填写的 IP/串口/波特率会通过环境变量传入）。
+
+对齐阶段主循环约 33Hz 检查，状态以 20Hz 推送到前端；**开始遥操后不再订阅/检查**，不会占用遥操通信。
 

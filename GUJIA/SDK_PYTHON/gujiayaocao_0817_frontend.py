@@ -1203,7 +1203,7 @@ class TeleopFrontend(tk.Tk):
                 self._handle_alignment_status(line[len("__ALIGN_STATUS__"):])
                 continue
             self._append_log(line)
-        self.after(80, self._poll_log_queue)
+        self.after(50, self._poll_log_queue)
 
     def _handle_alignment_status(self, payload_text):
         try:

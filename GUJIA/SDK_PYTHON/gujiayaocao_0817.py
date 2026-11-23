@@ -17,8 +17,64 @@ sys.path.insert(0, os.path.dirname(_SCRIPT_DIR))
 from SDK_PYTHON.fx_robot import Marvin_Robot, DCSS
 
 GRIPPER_CONFIG_PATH = os.path.join(_SCRIPT_DIR, "gripper_config.ini")
+TELEOP_CONFIG_PATH = os.path.join(_SCRIPT_DIR, "teleop_config.ini")
 
-ROBOT_IP = os.environ.get("GUJIAYAOCAO_ROBOT_IP", "192.168.1.190")
+
+def _load_teleop_config():
+    config = configparser.ConfigParser()
+    if os.path.isfile(TELEOP_CONFIG_PATH):
+        try:
+            config.read(TELEOP_CONFIG_PATH, encoding="utf-8")
+        except Exception as exc:
+            print(f"[配置] 读取失败，使用默认值: {exc}")
+    return config
+
+
+TELEOP_CFG = _load_teleop_config()
+
+
+def _cfg_raw(section, key, fallback):
+    try:
+        return TELEOP_CFG.get(section, key)
+    except (configparser.NoSectionError, configparser.NoOptionError):
+        return fallback
+
+
+def _cfg_float(section, key, fallback):
+    try:
+        return float(_cfg_raw(section, key, fallback))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _cfg_int(section, key, fallback):
+    try:
+        return int(_cfg_raw(section, key, fallback))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _cfg_bool(section, key, fallback):
+    raw = _cfg_raw(section, key, None)
+    if raw is None:
+        return fallback
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _cfg_list(section, key, fallback, expected_len=None):
+    raw = _cfg_raw(section, key, None)
+    if raw is None:
+        return list(fallback)
+    try:
+        values = [float(item) for item in raw.split(",") if item.strip()]
+    except ValueError:
+        return list(fallback)
+    if not values or (expected_len is not None and len(values) != expected_len):
+        return list(fallback)
+    return values
+
+
+ROBOT_IP = os.environ.get("GUJIAYAOCAO_ROBOT_IP") or _cfg_raw("robot", "ip", "192.168.1.190")
 
 
 def _default_encoder_port():
@@ -33,21 +89,51 @@ def _default_encoder_port():
     return ports[0].device if ports else "/dev/ttyUSB0"
 
 
-ENCODER_PORT = os.environ.get("GUJIAYAOCAO_ENCODER_PORT") or _default_encoder_port()
-ENCODER_BAUDRATE = int(os.environ.get("GUJIAYAOCAO_ENCODER_BAUDRATE", "1000000"))
+ENCODER_PORT = (
+    os.environ.get("GUJIAYAOCAO_ENCODER_PORT")
+    or str(_cfg_raw("encoder", "port", "") or "").strip()
+    or _default_encoder_port()
+)
+ENCODER_BAUDRATE = int(
+    os.environ.get("GUJIAYAOCAO_ENCODER_BAUDRATE")
+    or _cfg_int("encoder", "baudrate", 1000000)
+)
 
-# START_POSE_A = [90.0, -90.0, -90.0, -90.0, 0.0, 0.0, 0.0]
-# START_POSE_B = [-90.0, -90.0, 90.0, -90.0, 0.0, 0.0, 0.0]
-START_POSE_A = [120.0, -90.0, -90.0, -130.0, 0.0, 20.0, 0.0]
-START_POSE_B = [-120.0, -90.0, 90.0, -130.0, 0.0, 20.0, 0.0]
-START_POSE_TOL_DEG = 5.0
-SKELETON_ALIGN_TOL_DEG = 10.0
-SKELETON_REALIGN_TOL_DEG = float(os.environ.get("GUJIAYAOCAO_SKELETON_REALIGN_TOL_DEG", "30.0"))
-GATE_STATUS_INTERVAL_SEC = 2.0
-TELEOP_START_STEP_DEG = float(os.environ.get("GUJIAYAOCAO_TELEOP_START_STEP_DEG", "0.2"))
-HOME_STEP_DEG = float(os.environ.get("GUJIAYAOCAO_HOME_STEP_DEG", "0.2"))
-GRIPPER_CMD_HZ = float(os.environ.get("GUJIAYAOCAO_GRIPPER_CMD_HZ", "50"))
-GRIPPER_RECV_HZ = float(os.environ.get("GUJIAYAOCAO_GRIPPER_RECV_HZ", "10"))
+_DEFAULT_START_POSE_A = [120.0, -90.0, -90.0, -130.0, 0.0, 20.0, 0.0]
+_DEFAULT_START_POSE_B = [-120.0, -90.0, 90.0, -130.0, 0.0, 20.0, 0.0]
+START_POSE_A = _cfg_list("robot", "start_pose_a", _DEFAULT_START_POSE_A, 7)
+START_POSE_B = _cfg_list("robot", "start_pose_b", _DEFAULT_START_POSE_B, 7)
+START_POSE_TOL_DEG = _cfg_float("robot", "start_tol_deg", 5.0)
+SKELETON_ALIGN_TOL_DEG = _cfg_float("robot", "skeleton_align_tol_deg", 10.0)
+SKELETON_REALIGN_TOL_DEG = float(
+    os.environ.get("GUJIAYAOCAO_SKELETON_REALIGN_TOL_DEG")
+    or _cfg_float("robot", "skeleton_realign_tol_deg", 30.0)
+)
+MAIN_LOOP_PERIOD_SEC = max(0.001, _cfg_float("control", "loop_period_sec", 0.03))
+GATE_STATUS_INTERVAL_SEC = max(0.0, _cfg_float("control", "gate_status_interval_sec", 0.05))
+GATE_PRINT_INTERVAL_SEC = max(0.0, _cfg_float("control", "gate_print_interval_sec", 2.0))
+HOME_WAIT_TIMEOUT_SEC = max(0.1, _cfg_float("control", "home_wait_timeout_sec", 10.0))
+HOME_INTERP_EXTRA_SEC = max(0.0, _cfg_float("control", "home_interp_extra_sec", 5.0))
+ROBOT_VEL_RATIO = _cfg_int("robot", "vel_ratio", 100)
+ROBOT_ACC_RATIO = _cfg_int("robot", "acc_ratio", 100)
+ENCODER_ENABLE_CHECKSUM = _cfg_bool("encoder", "enable_checksum", True)
+TELEOP_START_STEP_DEG = float(
+    os.environ.get("GUJIAYAOCAO_TELEOP_START_STEP_DEG")
+    or _cfg_float("control", "teleop_start_step_deg", 0.2)
+)
+HOME_STEP_DEG = float(
+    os.environ.get("GUJIAYAOCAO_HOME_STEP_DEG")
+    or _cfg_float("control", "home_step_deg", 0.2)
+)
+CTRL_HZ = max(1.0, _cfg_float("control", "ctrl_hz", 100.0))
+GRIPPER_CMD_HZ = float(
+    os.environ.get("GUJIAYAOCAO_GRIPPER_CMD_HZ")
+    or _cfg_float("gripper", "command_hz", 50.0)
+)
+GRIPPER_RECV_HZ = float(
+    os.environ.get("GUJIAYAOCAO_GRIPPER_RECV_HZ")
+    or _cfg_float("gripper", "recv_hz", 10.0)
+)
 ALIGN_STAGE_ARM = "arm"
 ALIGN_STAGE_SKELETON = "skeleton"
 ALIGN_STAGE_READY = "ready"
@@ -276,13 +362,14 @@ time.sleep(1)
 
 
 # =====================【正确设置工具负载，阻抗模式之前执行】======================
-# --------请根据你的实际夹具修改下面参数--------
+# 参数在 teleop_config.ini 的 [tool] 中配置
 # kineParams [X,Y,Z mm, A,B,C deg] 法兰到工具末端偏移
-tool_kine_A = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-tool_dyn_A = [0.5,0.0, 0.0, 50.0,0.004, 0.000, 0.00,0.004, 0.000, 0.03]
-
-tool_kine_B = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-tool_dyn_B = [0.5,0.0, 0.0, 50.0,0.004, 0.000, 0.00,0.004, 0.000, 0.03]
+_DEFAULT_TOOL_KINE = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+_DEFAULT_TOOL_DYN = [0.5, 0.0, 0.0, 50.0, 0.004, 0.000, 0.00, 0.004, 0.000, 0.03]
+tool_kine_A = _cfg_list("tool", "a_kine", _DEFAULT_TOOL_KINE, 6)
+tool_dyn_A = _cfg_list("tool", "a_dyn", _DEFAULT_TOOL_DYN, 10)
+tool_kine_B = _cfg_list("tool", "b_kine", _DEFAULT_TOOL_KINE, 6)
+tool_dyn_B = _cfg_list("tool", "b_dyn", _DEFAULT_TOOL_DYN, 10)
 robot.clear_set()
 ret_a = robot.set_tool("A", kineParams=tool_kine_A, dynamicParams=tool_dyn_A)
 ret_b = robot.set_tool("B", kineParams=tool_kine_B, dynamicParams=tool_dyn_B)
@@ -296,15 +383,17 @@ time.sleep(0.5)
 
 logger.info("已设置A/B臂工具负载，准备进入关节阻抗扭矩模式")
 
-'''阻抗参数'''
+'''阻抗参数（teleop_config.ini 的 [impedance]）'''
+IMPEDANCE_K = _cfg_list("impedance", "k", [12, 12, 12, 10, 9, 9, 7], 7)
+IMPEDANCE_D = _cfg_list("impedance", "d", [0.1] * 7, 7)
 robot.clear_set()
-robot.set_joint_kd_params(arm='A',K=[12,12,12,10, 9, 9, 7], D=[0.1,0.1,0.1,0.1,0.1,0.1,0.1])
-robot.set_joint_kd_params(arm='B',K=[12,12,12,10, 9, 9, 7], D=[0.1,0.1,0.1,0.1,0.1,0.1,0.1])
+robot.set_joint_kd_params(arm='A', K=IMPEDANCE_K, D=IMPEDANCE_D)
+robot.set_joint_kd_params(arm='B', K=IMPEDANCE_K, D=IMPEDANCE_D)
 robot.send_cmd()
 time.sleep(1)
 
 '''开启A/B双臂速度前馈'''
-ctrl_hz = 100
+ctrl_hz = CTRL_HZ
 vel_step_ms = max(1, int(round(1000.0 / ctrl_hz)))
 robot.clear_set()
 ok_a = robot.set_vel_est_step(arm='A', time=vel_step_ms)
@@ -321,8 +410,8 @@ robot.set_state(arm='A',state=3)
 robot.set_state(arm='B',state=3)
 robot.set_impedance_type(arm='A',type=1)
 robot.set_impedance_type(arm='B',type=1)
-robot.set_vel_acc(arm='A',velRatio=100, AccRatio=100)
-robot.set_vel_acc(arm='B',velRatio=100, AccRatio=100)
+robot.set_vel_acc(arm='A',velRatio=ROBOT_VEL_RATIO, AccRatio=ROBOT_ACC_RATIO)
+robot.set_vel_acc(arm='B',velRatio=ROBOT_VEL_RATIO, AccRatio=ROBOT_ACC_RATIO)
 robot.send_cmd()
 time.sleep(1)
 
@@ -435,13 +524,13 @@ class STSDriver:
 class EncoderReader:
     """编码器核心处理类，增加一阶低通滤波 + 夹爪遥操作"""
     def __init__(self):
-        # ===================== 可手动修改配置 =====================
+        # ===================== 可配置参数（teleop_config.ini） =====================
         self.port = ENCODER_PORT
         self.baudrate = ENCODER_BAUDRATE
-        self.send_frequency = 100.0
-        self.enable_checksum = True
-        self.encoder_resolution = 4096
-      
+        self.send_frequency = _cfg_float("encoder", "send_frequency", 100.0)
+        self.enable_checksum = ENCODER_ENABLE_CHECKSUM
+        self.encoder_resolution = int(_cfg_float("encoder", "resolution", 4096))
+
         # 获取当前py脚本所在文件夹
         script_path = os.path.abspath(__file__)
         script_dir = os.path.dirname(script_path)
@@ -454,30 +543,30 @@ class EncoderReader:
                 f"伺服配置文件缺失！\n预期路径：{self.config_file}\n请确认servo_config.ini放置到脚本同级目录"
             )
         # 一阶低通滤波系数 α 0~1；越小滤波越强，响应越慢
-        self.filter_alpha = 0.9
-        
-        # ----------------【夹爪硬件配置，请修改为你的实际硬件】----------------
+        self.filter_alpha = _cfg_float("encoder", "filter_alpha", 0.9)
+
+        # ----------------【夹爪配置（teleop_config.ini 的 [gripper]）】----------------
         # 编码器 ID 与关节的对应关系（可在 servo_config.ini 的 [encoder_map] 覆盖）
         self.arm_a_ids = list(DEFAULT_ARM_A_ENCODER_IDS)
         self.arm_b_ids = list(DEFAULT_ARM_B_ENCODER_IDS)
         self.left_gripper_id = DEFAULT_LEFT_GRIPPER_ENCODER_ID
         self.right_gripper_id = DEFAULT_RIGHT_GRIPPER_ENCODER_ID
         # STS编码器摆动角度范围(deg)
-        self.enc_min_deg = 0.0
-        self.enc_max_deg = 90.0
+        self.enc_min_deg = _cfg_float("gripper", "enc_min_deg", 0.0)
+        self.enc_max_deg = _cfg_float("gripper", "enc_max_deg", 90.0)
         # 达妙DM4310夹爪电机CAN ID
-        self.motor_left_slave  = 1
-        self.motor_right_slave = 2
+        self.motor_left_slave  = _cfg_int("gripper", "left_motor_id", 1)
+        self.motor_right_slave = _cfg_int("gripper", "right_motor_id", 2)
         self.motor_left_master  = self.motor_left_slave + 0x10
         self.motor_right_master = self.motor_right_slave + 0x10
         # MIT控制参数
-        self.grip_kp = 3.0
-        self.grip_kd = 0.12
-        self.grip_tau_ff = 0.0
+        self.grip_kp = _cfg_float("gripper", "kp", 3.0)
+        self.grip_kd = _cfg_float("gripper", "kd", 0.12)
+        self.grip_tau_ff = _cfg_float("gripper", "tau_ff", 0.0)
         # 夹爪电机机械限位 rad
-        self.gripper_qmin = 0.0
-        self.gripper_qmax = 1.3
-        self.gripper_teleop_enable = True   # 是否开启夹爪跟随
+        self.gripper_qmin = _cfg_float("gripper", "qmin", 0.0)
+        self.gripper_qmax = _cfg_float("gripper", "qmax", 1.3)
+        self.gripper_teleop_enable = _cfg_bool("gripper", "teleop_enable", True)   # 是否开启夹爪跟随
         self.gripper_cmd_period = 1.0 / max(1.0, GRIPPER_CMD_HZ)
         self.gripper_recv_period = 1.0 / max(1.0, GRIPPER_RECV_HZ)
         self.next_gripper_cmd_time = 0.0
@@ -882,137 +971,164 @@ def main():
         print(f"[GATE] 第一步：先对齐机械臂到 L/A={format_joint_list(START_POSE_A)}，R/B={format_joint_list(START_POSE_B)}，允许误差±{START_POSE_TOL_DEG:.1f}°。")
         print(f"[GATE] 第二步：机械臂对齐后，再对齐骨架编码器；每个骨架关节只需进入一次≤{SKELETON_ALIGN_TOL_DEG:.1f}°误差范围。")
         last_gate_status_time = 0.0
+        last_gate_print_time = 0.0
         skeleton_aligned_a = [False] * 7
         skeleton_aligned_b = [False] * 7
         teleop_has_started = False
         skeleton_realign_required = False
         # =========主程序循环========================
 
+        # 主循环状态（遥操中不再刷新，保留最后一次对齐结果）
+        a_real = [0.0] * 7
+        b_real = [0.0] * 7
+        target_A = [0.0] * 7
+        target_B = [0.0] * 7
+        filter_ok_a = False
+        filter_ok_b = False
+        max_err_a = 999.0
+        max_err_b = 999.0
+        max_err = 999.0
+        start_err_a = 999.0
+        start_err_b = 999.0
+        start_pose_ok = False
+        can_start_teleop = False
+        alignment_stage = ALIGN_STAGE_ARM
+
         while running:
-            sub_data = robot.subscribe(dcss)
-            time.sleep(0.2)
-            a_real, b_real = reader.get_robot_real_joint()
+            loop_start = time.time()
             # 消费脚踏按下事件。事件由键盘回调锁存，短脉冲不会被主循环漏掉。
             left_pressed = consume_pedal_press("left")
             right_pressed = consume_pedal_press("right")
 
-            # =====================【持续实时对比：机械臂真实角度 VS 编码器角度】=====================
-            MAX_ALLOW_ERR_DEG = SKELETON_ALIGN_TOL_DEG   # 最大允许单关节角度误差(度)
+            if going:
+                # 对齐阶段：实时检查；遥操开始后不再 subscribe/检查，避免占用通信
+                robot.subscribe(dcss)
+                a_real, b_real = reader.get_robot_real_joint()
 
-            filter_ok_a = False
-            filter_ok_b = False
-            max_err_a = 999.0
-            max_err_b = 999.0
-            with reader.data_mutex:
-                target_A = [reader.filtered_angle.get(sid, 0.0) for sid in reader.arm_a_ids]
-                target_B = [reader.filtered_angle.get(sid, 0.0) for sid in reader.arm_b_ids]
-                filter_ok_a = all(reader.filter_init_flag.get(sid, False) for sid in reader.arm_a_ids)
-                filter_ok_b = all(reader.filter_init_flag.get(sid, False) for sid in reader.arm_b_ids)
+                # =====================【持续实时对比：机械臂真实角度 VS 编码器角度】=====================
+                MAX_ALLOW_ERR_DEG = SKELETON_ALIGN_TOL_DEG   # 最大允许单关节角度误差(度)
 
-            start_err_a = max_abs_joint_error(a_real, START_POSE_A)
-            start_err_b = max_abs_joint_error(b_real, START_POSE_B)
-            start_pose_ok = start_err_a <= START_POSE_TOL_DEG and start_err_b <= START_POSE_TOL_DEG
-            if not start_pose_ok and not teleop_has_started and not skeleton_realign_required:
-                skeleton_aligned_a = [False] * 7
-                skeleton_aligned_b = [False] * 7
+                filter_ok_a = False
+                filter_ok_b = False
+                max_err_a = 999.0
+                max_err_b = 999.0
+                with reader.data_mutex:
+                    target_A = [reader.filtered_angle.get(sid, 0.0) for sid in reader.arm_a_ids]
+                    target_B = [reader.filtered_angle.get(sid, 0.0) for sid in reader.arm_b_ids]
+                    filter_ok_a = all(reader.filter_init_flag.get(sid, False) for sid in reader.arm_a_ids)
+                    filter_ok_b = all(reader.filter_init_flag.get(sid, False) for sid in reader.arm_b_ids)
 
-            # 只有初始化完成才计算误差，否则误差置很大
-            if filter_ok_a and filter_ok_b:
-                skeleton_err_a = [angle_diff_deg(a_real[i], target_A[i]) for i in range(7)]
-                skeleton_err_b = [angle_diff_deg(b_real[i], target_B[i]) for i in range(7)]
-                max_err_a = max(skeleton_err_a)
-                max_err_b = max(skeleton_err_b)
-                if start_pose_ok or teleop_has_started or skeleton_realign_required:
+                start_err_a = max_abs_joint_error(a_real, START_POSE_A)
+                start_err_b = max_abs_joint_error(b_real, START_POSE_B)
+                start_pose_ok = start_err_a <= START_POSE_TOL_DEG and start_err_b <= START_POSE_TOL_DEG
+                if not start_pose_ok and not teleop_has_started and not skeleton_realign_required:
+                    skeleton_aligned_a = [False] * 7
+                    skeleton_aligned_b = [False] * 7
+
+                # 只有初始化完成才计算误差，否则误差置很大
+                if filter_ok_a and filter_ok_b:
+                    skeleton_err_a = [angle_diff_deg(a_real[i], target_A[i]) for i in range(7)]
+                    skeleton_err_b = [angle_diff_deg(b_real[i], target_B[i]) for i in range(7)]
+                    max_err_a = max(skeleton_err_a)
+                    max_err_b = max(skeleton_err_b)
+                    if start_pose_ok or teleop_has_started or skeleton_realign_required:
+                        for i in range(7):
+                            if skeleton_err_a[i] <= MAX_ALLOW_ERR_DEG:
+                                skeleton_aligned_a[i] = True
+                            if skeleton_err_b[i] <= MAX_ALLOW_ERR_DEG:
+                                skeleton_aligned_b[i] = True
+                max_err = max(max_err_a, max_err_b)
+
+                if (
+                    filter_ok_a
+                    and filter_ok_b
+                    and all(skeleton_aligned_a)
+                    and all(skeleton_aligned_b)
+                    and max_err > SKELETON_REALIGN_TOL_DEG
+                ):
+                    exceeded_a = [err > SKELETON_REALIGN_TOL_DEG for err in skeleton_err_a]
+                    exceeded_b = [err > SKELETON_REALIGN_TOL_DEG for err in skeleton_err_b]
                     for i in range(7):
-                        if skeleton_err_a[i] <= MAX_ALLOW_ERR_DEG:
-                            skeleton_aligned_a[i] = True
-                        if skeleton_err_b[i] <= MAX_ALLOW_ERR_DEG:
-                            skeleton_aligned_b[i] = True
-            max_err = max(max_err_a, max_err_b)
+                        if exceeded_a[i]:
+                            skeleton_aligned_a[i] = False
+                        if exceeded_b[i]:
+                            skeleton_aligned_b[i] = False
 
-            if (
-                going
-                and filter_ok_a
-                and filter_ok_b
-                and all(skeleton_aligned_a)
-                and all(skeleton_aligned_b)
-                and max_err > SKELETON_REALIGN_TOL_DEG
-            ):
-                exceeded_a = [err > SKELETON_REALIGN_TOL_DEG for err in skeleton_err_a]
-                exceeded_b = [err > SKELETON_REALIGN_TOL_DEG for err in skeleton_err_b]
-                for i in range(7):
-                    if exceeded_a[i]:
-                        skeleton_aligned_a[i] = False
-                    if exceeded_b[i]:
-                        skeleton_aligned_b[i] = False
+                    if max_err_a >= max_err_b:
+                        exceed_joint = f"A{max(range(7), key=lambda i: skeleton_err_a[i]) + 1}"
+                    else:
+                        exceed_joint = f"B{max(range(7), key=lambda i: skeleton_err_b[i]) + 1}"
 
-                if max_err_a >= max_err_b:
-                    exceed_joint = f"A{max(range(7), key=lambda i: skeleton_err_a[i]) + 1}"
-                else:
-                    exceed_joint = f"B{max(range(7), key=lambda i: skeleton_err_b[i]) + 1}"
-
-                skeleton_realign_required = True
-                print(
-                    f"[GATE] 骨架点位偏差超过 {SKELETON_REALIGN_TOL_DEG:.1f}°，"
-                    f"需要重新对齐超限关节；最大偏差 {max_err:.2f}°({exceed_joint})。"
-                )
-                last_gate_status_time = 0.0
-
-            skeleton_pose_ok = (
-                filter_ok_a
-                and filter_ok_b
-                and all(skeleton_aligned_a)
-                and all(skeleton_aligned_b)
-            )
-            start_guard_ok = filter_ok_a and filter_ok_b and max_err <= SKELETON_REALIGN_TOL_DEG
-            can_start_teleop = (
-                skeleton_pose_ok
-                and start_guard_ok
-                and (start_pose_ok or teleop_has_started or skeleton_realign_required)
-            )
-            if skeleton_pose_ok and start_guard_ok and (start_pose_ok or teleop_has_started or skeleton_realign_required):
-                alignment_stage = ALIGN_STAGE_READY
-            elif not start_pose_ok and not teleop_has_started and not skeleton_realign_required:
-                alignment_stage = ALIGN_STAGE_ARM
-            elif not skeleton_pose_ok:
-                alignment_stage = ALIGN_STAGE_SKELETON
-            else:
-                alignment_stage = ALIGN_STAGE_READY
-
-            now = time.time()
-            if going and now - last_gate_status_time >= GATE_STATUS_INTERVAL_SEC:
-                emit_alignment_status(
-                    a_real,
-                    b_real,
-                    target_A,
-                    target_B,
-                    filter_ok_a,
-                    filter_ok_b,
-                    going,
-                    alignment_stage,
-                    skeleton_aligned_a,
-                    skeleton_aligned_b,
-                )
-                if alignment_stage == ALIGN_STAGE_ARM:
+                    skeleton_realign_required = True
                     print(
-                        f"[GATE] 当前阶段=手臂对齐；起始点误差 A/L={start_err_a:.2f}°, "
-                        f"B/R={start_err_b:.2f}°, 阈值={START_POSE_TOL_DEG:.1f}°"
+                        f"[GATE] 骨架点位偏差超过 {SKELETON_REALIGN_TOL_DEG:.1f}°，"
+                        f"需要重新对齐超限关节；最大偏差 {max_err:.2f}°({exceed_joint})。"
                     )
-                elif alignment_stage == ALIGN_STAGE_SKELETON:
-                    print(
-                        f"[GATE] 当前阶段=骨架对齐；骨架已对齐 A={sum(skeleton_aligned_a)}/7, "
-                        f"B={sum(skeleton_aligned_b)}/7；当前最大误差 A={max_err_a:.2f}°, "
-                        f"B={max_err_b:.2f}°, 阈值={SKELETON_ALIGN_TOL_DEG:.1f}°"
-                    )
-                else:
-                    print("[GATE] 手臂和骨架均已对齐，可以按右踏板开启摇操。")
-                last_gate_status_time = now
+                    last_gate_status_time = 0.0
 
-            # 【可选】打开实时偏差打印，调试用；正式运行可以注释掉
-            #print(f"实时偏差 | A臂={max_err_a:.2f}°, B臂={max_err_b:.2f}°,最大={max_err:.2f}°")
-            # ====================================================================================
+                skeleton_pose_ok = (
+                    filter_ok_a
+                    and filter_ok_b
+                    and all(skeleton_aligned_a)
+                    and all(skeleton_aligned_b)
+                )
+                start_guard_ok = filter_ok_a and filter_ok_b and max_err <= SKELETON_REALIGN_TOL_DEG
+                can_start_teleop = (
+                    skeleton_pose_ok
+                    and start_guard_ok
+                    and (start_pose_ok or teleop_has_started or skeleton_realign_required)
+                )
+                if skeleton_pose_ok and start_guard_ok and (start_pose_ok or teleop_has_started or skeleton_realign_required):
+                    alignment_stage = ALIGN_STAGE_READY
+                elif not start_pose_ok and not teleop_has_started and not skeleton_realign_required:
+                    alignment_stage = ALIGN_STAGE_ARM
+                elif not skeleton_pose_ok:
+                    alignment_stage = ALIGN_STAGE_SKELETON
+                else:
+                    alignment_stage = ALIGN_STAGE_READY
+
+                now = time.time()
+                if now - last_gate_status_time >= GATE_STATUS_INTERVAL_SEC:
+                    emit_alignment_status(
+                        a_real,
+                        b_real,
+                        target_A,
+                        target_B,
+                        filter_ok_a,
+                        filter_ok_b,
+                        going,
+                        alignment_stage,
+                        skeleton_aligned_a,
+                        skeleton_aligned_b,
+                    )
+                    last_gate_status_time = now
+
+                # 控制台打印单独节流，避免 20Hz 状态刷新刷屏
+                if now - last_gate_print_time >= GATE_PRINT_INTERVAL_SEC:
+                    if alignment_stage == ALIGN_STAGE_ARM:
+                        print(
+                            f"[GATE] 当前阶段=手臂对齐；起始点误差 A/L={start_err_a:.2f}°, "
+                            f"B/R={start_err_b:.2f}°, 阈值={START_POSE_TOL_DEG:.1f}°"
+                        )
+                    elif alignment_stage == ALIGN_STAGE_SKELETON:
+                        print(
+                            f"[GATE] 当前阶段=骨架对齐；骨架已对齐 A={sum(skeleton_aligned_a)}/7, "
+                            f"B={sum(skeleton_aligned_b)}/7；当前最大误差 A={max_err_a:.2f}°, "
+                            f"B={max_err_b:.2f}°, 阈值={SKELETON_ALIGN_TOL_DEG:.1f}°"
+                        )
+                    else:
+                        print("[GATE] 手臂和骨架均已对齐，可以按右踏板开启摇操。")
+                    last_gate_print_time = now
+
+                # 【可选】打开实时偏差打印，调试用；正式运行可以注释掉
+                #print(f"实时偏差 | A臂={max_err_a:.2f}°, B臂={max_err_b:.2f}°,最大={max_err:.2f}°")
+                # ====================================================================================
             # =========左踏板s：按下执行回Home=========
             if left_pressed is True and home_running is False:
+                if not going:
+                    # 遥操中按下：补一次订阅获取当前姿态
+                    robot.subscribe(dcss)
+                    a_real, b_real = reader.get_robot_real_joint()
                 going = True
                 teleop_interp_a = None
                 teleop_interp_b = None
@@ -1036,7 +1152,7 @@ def main():
                     max_abs_joint_error(joint_cmd_1, START_POSE_A),
                     max_abs_joint_error(joint_cmd_2, START_POSE_B),
                 )
-                home_interp_timeout = max(10.0, max_home_delta / max(HOME_STEP_DEG, 0.001) * home_period + 5.0)
+                home_interp_timeout = max(10.0, max_home_delta / max(HOME_STEP_DEG, 0.001) * home_period + HOME_INTERP_EXTRA_SEC)
                 home_interp_start = time.time()
                 print(f"[INTERP] 回Home插点过渡，每周期最大步长 {HOME_STEP_DEG:.2f}°")
 
@@ -1065,7 +1181,7 @@ def main():
                     time.sleep(home_period)
 
                 # 等待双臂运动到位，增加超时保护
-                MAX_WAIT_SEC = 10.0
+                MAX_WAIT_SEC = HOME_WAIT_TIMEOUT_SEC
                 start_wait = time.time()
                 sub_data = robot.subscribe(dcss)
 
@@ -1130,7 +1246,10 @@ def main():
                 teleop_has_started = True
                 skeleton_realign_required = False
 
-            time.sleep(0.1)  # 主循环间隔，降低CPU占用
+            # 控制主循环周期
+            elapsed = time.time() - loop_start
+            if elapsed < MAIN_LOOP_PERIOD_SEC:
+                time.sleep(MAIN_LOOP_PERIOD_SEC - elapsed)
 
         # ----------------ESC按下后执行资源清理（只保留一份）----------------
         if reader:
