@@ -9,6 +9,21 @@ from typing import List
 current_file_path = os.path.abspath(__file__)
 current_path = os.path.dirname(current_file_path)
 
+
+def _lib_path(filename):
+    """在脚本目录、exe 目录和 PyInstaller 解包目录中查找动态库。"""
+    candidates = [
+        current_path,
+        os.path.dirname(os.path.abspath(sys.executable)),
+        getattr(sys, "_MEIPASS", ""),
+    ]
+    for folder in candidates:
+        if folder:
+            path = os.path.join(folder, filename)
+            if os.path.exists(path):
+                return path
+    return os.path.join(current_path, filename)
+
 logging.basicConfig(format='%(message)s')
 logger = logging.getLogger('debug_printer')
 # logger.setLevel(logging.INFO)
@@ -20,9 +35,9 @@ class Marvin_Kine:
         """初始化机器人控制类"""
         logger.info(f'user platform: {sys.platform}')
         if sys.platform == 'win32':
-            self.kine = ctypes.WinDLL(os.path.join(current_path, 'libKine.dll'))
+            self.kine = ctypes.WinDLL(_lib_path('libKine.dll'))
         else:
-            self.kine = ctypes.CDLL(os.path.join(current_path, 'libKine.so'))
+            self.kine = ctypes.CDLL(_lib_path('libKine.so'))
 
         self.sp = FX_InvKineSolvePara()
         self.jacobi = FX_Jacobi()

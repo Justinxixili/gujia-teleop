@@ -25,7 +25,12 @@ except Exception:
     Key = None
 
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+FROZEN = bool(getattr(sys, "frozen", False))
+if FROZEN:
+    # 打包成 exe 后，配置和输出都放在 exe 所在目录
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONTROL_SCRIPT = os.path.join(SCRIPT_DIR, "gujiayaocao_0817.py")
 
 
@@ -1056,7 +1061,7 @@ class TeleopFrontend(tk.Tk):
             self._append_log("[界面] 程序已在运行。\n")
             return
 
-        if not os.path.isfile(CONTROL_SCRIPT):
+        if not FROZEN and not os.path.isfile(CONTROL_SCRIPT):
             messagebox.showerror("启动失败", f"找不到控制脚本:\n{CONTROL_SCRIPT}")
             self._show_notice("启动失败：找不到控制脚本。")
             return
@@ -1069,18 +1074,22 @@ class TeleopFrontend(tk.Tk):
 
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUNBUFFERED"] = "1"
         env["GUJIAYAOCAO_ROBOT_IP"] = self.robot_ip_var.get().strip()
         env["GUJIAYAOCAO_ENCODER_PORT"] = self.port_var.get().strip()
         env["GUJIAYAOCAO_ENCODER_BAUDRATE"] = baud
 
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
 
+        # 打包后由同一个 exe 以 --run-control 模式运行控制脚本
+        command = [sys.executable, "--run-control"] if FROZEN else [sys.executable, "-u", CONTROL_SCRIPT]
+
         self.status_var.set("启动中")
         self._set_busy(True)
         self._reset_alignment_panel()
         try:
             self.process = subprocess.Popen(
-                [sys.executable, "-u", CONTROL_SCRIPT],
+                command,
                 cwd=SCRIPT_DIR,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -1130,7 +1139,16 @@ class TeleopFrontend(tk.Tk):
             return
         self._append_log("[界面] ESC 后仍在运行，执行进程终止。\n")
         try:
-            self.process.terminate()
+            if os.name == "nt":
+                # 打包后的 onefile exe 是“引导进程 + 子进程”，需要杀掉整个进程树
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(self.process.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                self.process.terminate()
         except Exception as exc:
             self._append_log(f"[界面] 终止失败: {exc}\n")
             self._show_notice(f"终止失败: {exc}")

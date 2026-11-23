@@ -12,7 +12,11 @@ import signal
 import logging
 from pynput import keyboard
 # 保证无论从哪个目录启动，都能以 SDK_PYTHON 包的相对方式导入 fx_robot
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    # 打包成 exe 后，配置都在 exe 所在目录
+    _SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_SCRIPT_DIR))
 from SDK_PYTHON.fx_robot import Marvin_Robot, DCSS
 
@@ -531,11 +535,8 @@ class EncoderReader:
         self.enable_checksum = ENCODER_ENABLE_CHECKSUM
         self.encoder_resolution = int(_cfg_float("encoder", "resolution", 4096))
 
-        # 获取当前py脚本所在文件夹
-        script_path = os.path.abspath(__file__)
-        script_dir = os.path.dirname(script_path)
         # 拼接得到ini完整绝对路径，固定地址
-        self.config_file = os.path.join(script_dir, "servo_config.ini")
+        self.config_file = os.path.join(_SCRIPT_DIR, "servo_config.ini")
 
         # 校验配置文件是否存在，不存在抛出异常终止程序，打印完整路径方便排查
         if not os.path.isfile(self.config_file):

@@ -11,3 +11,8 @@ GUJIA/SDK_PYTHON/camera_dataset/*
 *.log
 Thumbs.db
 .DS_Store
+
+# 打包产物（exe 体积大，不入库）
+GUJIA/SDK_PYTHON/release/
+GUJIA/SDK_PYTHON/packaging/_build/
+GUJIA/SDK_PYTHON/*.zip

@@ -18,6 +18,7 @@ import configparser
 import math
 import os
 import queue
+import sys
 import threading
 import time
 from collections import deque
@@ -36,7 +37,10 @@ except Exception as exc:  # pyserial 缺失时界面仍可打开，连接时提�
     SERIAL_IMPORT_ERROR = exc
 
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SERVO_CONFIG_PATH = os.path.join(SCRIPT_DIR, "servo_config.ini")
 
 ENCODER_RESOLUTION = 4096

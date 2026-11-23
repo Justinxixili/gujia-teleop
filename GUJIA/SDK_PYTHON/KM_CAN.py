@@ -4,7 +4,10 @@ from enum import IntEnum
 from struct import unpack
 from struct import pack
 import struct
-from fx_robot import Marvin_Robot
+try:
+    from SDK_PYTHON.fx_robot import Marvin_Robot
+except Exception:
+    from fx_robot import Marvin_Robot
 import select
 
 

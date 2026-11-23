@@ -105,3 +105,22 @@ target_open = -0.15
 
 对齐阶段主循环约 33Hz 检查，状态以 20Hz 推送到前端；**开始遥操后不再订阅/检查**，不会占用遥操通信。
 
+## 便携版 exe（打包）
+
+在 `SDK_PYTHON` 下执行：
+
+```bat
+python packaging/build_exe.py
+```
+
+生成 `release/`：
+
+- `GujiaTeleop.exe` —— 摇操控制台（前端 + 控制脚本同一个 exe，控制进程由前端以 `--run-control` 启动）
+- `OriginCalibration.exe` —— 舵机原点标定
+- `servo_config.ini` / `gripper_config.ini` / `teleop_config.ini`
+- `libMarvinSDK.dll` / `libKine.dll`
+- `使用说明.txt`
+
+同时生成 `SDK_PYTHON/GujiaTeleop_release.zip`，复制到其他 Windows 10/11 64 位电脑解压即可使用。打包产物不入库（见 `.gitignore`）。
+
+

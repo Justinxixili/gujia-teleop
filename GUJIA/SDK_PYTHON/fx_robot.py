@@ -3,6 +3,7 @@ import ctypes
 import inspect
 import os
 import re
+import sys
 import time
 from ctypes import *
 from textwrap import dedent
@@ -10,6 +11,21 @@ from typing import Union, List
 
 current_file_path = os.path.abspath(__file__)
 current_path = os.path.dirname(current_file_path)
+
+
+def _lib_path(filename):
+    """在脚本目录、exe 目录和 PyInstaller 解包目录中查找动态库。"""
+    candidates = [
+        current_path,
+        os.path.dirname(os.path.abspath(sys.executable)),
+        getattr(sys, "_MEIPASS", ""),
+    ]
+    for folder in candidates:
+        if folder:
+            path = os.path.join(folder, filename)
+            if os.path.exists(path):
+                return path
+    return os.path.join(current_path, filename)
 
 def update_text_file_simple(mode, data_list, filename):
     """
@@ -325,9 +341,9 @@ class Marvin_Robot:
         import sys
         print(f'user platform: {sys.platform}')
         if sys.platform=='win32':
-            self.robot = ctypes.WinDLL(os.path.join(current_path,'libMarvinSDK.dll'))
+            self.robot = ctypes.WinDLL(_lib_path('libMarvinSDK.dll'))
         else:
-            self.robot = ctypes.CDLL(os.path.join(current_path,'libMarvinSDK.so'))
+            self.robot = ctypes.CDLL(_lib_path('libMarvinSDK.so'))
         self.ErrorCode = None
         self.a_pvt_path=None
         self.b_pvt_path = None
@@ -1428,9 +1444,9 @@ class Concise_Marvin_Robot:
         import sys
         print(f'user platform: {sys.platform}')
         if sys.platform=='win32':
-            self.robot = ctypes.WinDLL(os.path.join(current_path,'libMarvinSDK.dll'))
+            self.robot = ctypes.WinDLL(_lib_path('libMarvinSDK.dll'))
         else:
-            self.robot = ctypes.CDLL(os.path.join(current_path,'libMarvinSDK.so'))
+            self.robot = ctypes.CDLL(_lib_path('libMarvinSDK.so'))
         self.ErrorCode = None
         self.a_pvt_path=None
         self.b_pvt_path = None
