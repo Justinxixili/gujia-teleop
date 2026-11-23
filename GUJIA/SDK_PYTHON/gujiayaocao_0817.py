@@ -50,10 +50,17 @@ ALIGN_STAGE_ARM = "arm"
 ALIGN_STAGE_SKELETON = "skeleton"
 ALIGN_STAGE_READY = "ready"
 
+# 编码器 ID → 关节映射（默认按 1..16 顺序；实际接线不同时改 servo_config.ini 的 [encoder_map]）
+DEFAULT_ARM_A_ENCODER_IDS = (1, 2, 3, 4, 5, 6, 7)       # A/L 臂 7 个关节
+DEFAULT_LEFT_GRIPPER_ENCODER_ID = 8                      # 左夹爪
+DEFAULT_ARM_B_ENCODER_IDS = (9, 10, 11, 12, 13, 14, 15)  # B/R 臂 7 个关节
+DEFAULT_RIGHT_GRIPPER_ENCODER_ID = 16                    # 右夹爪
+ENCODER_FRAME_COUNT = 16                                 # 一帧包含的编码器数量
+
 
 # =====================【新增：导入达妙电机库】=====================
 from KM_CAN import (
-    Motor, KMGripperControl, KM_Motor_Type, Control_Type, ERROR_MESSAGES
+    Motor, KMGripperControl, KM_Motor_Type, ERROR_MESSAGES
 )
 # =================================================================
 # 踏板当前状态
@@ -109,8 +116,18 @@ def clear_pedal_latches():
             pedal_press_latch[name] = False
 
 
+def wrap_deg(deg):
+    """把角度归一化到 [-180, 180)。"""
+    return (deg + 180.0) % 360.0 - 180.0
+
+
+def angle_diff_deg(a, b):
+    """两角之间的最短路径差值（绝对值），避免 ±180° 折叠造成 360° 误差。"""
+    return abs(wrap_deg(a - b))
+
+
 def max_abs_joint_error(actual, target):
-    return max(abs(actual[i] - target[i]) for i in range(7))
+    return max(angle_diff_deg(actual[i], target[i]) for i in range(7))
 
 
 def format_joint_list(joints):
@@ -121,9 +138,9 @@ def step_joint_pose(current, target, max_step_deg):
     next_pose = []
     done = True
     for cur, dst in zip(current, target):
-        delta = dst - cur
+        delta = wrap_deg(dst - cur)
         if abs(delta) > max_step_deg:
-            cur += math.copysign(max_step_deg, delta)
+            cur = wrap_deg(cur + math.copysign(max_step_deg, delta))
             done = False
         else:
             cur = dst
@@ -143,11 +160,11 @@ def emit_alignment_status(
     skeleton_aligned_a=None,
     skeleton_aligned_b=None,
 ):
-    start_err_a = [abs(a_real[i] - START_POSE_A[i]) for i in range(7)]
-    start_err_b = [abs(b_real[i] - START_POSE_B[i]) for i in range(7)]
+    start_err_a = [angle_diff_deg(a_real[i], START_POSE_A[i]) for i in range(7)]
+    start_err_b = [angle_diff_deg(b_real[i], START_POSE_B[i]) for i in range(7)]
     check_skeleton = stage in (ALIGN_STAGE_SKELETON, ALIGN_STAGE_READY)
-    skeleton_err_a = [abs(a_real[i] - target_a[i]) for i in range(7)] if check_skeleton and filter_ok_a else [None] * 7
-    skeleton_err_b = [abs(b_real[i] - target_b[i]) for i in range(7)] if check_skeleton and filter_ok_b else [None] * 7
+    skeleton_err_a = [angle_diff_deg(a_real[i], target_a[i]) for i in range(7)] if check_skeleton and filter_ok_a else [None] * 7
+    skeleton_err_b = [angle_diff_deg(b_real[i], target_b[i]) for i in range(7)] if check_skeleton and filter_ok_b else [None] * 7
     payload = {
         "start_tol": START_POSE_TOL_DEG,
         "skeleton_tol": SKELETON_ALIGN_TOL_DEG,
@@ -402,10 +419,13 @@ class STSDriver:
                     data = self.fd.read(self.fd.in_waiting)
                     response.extend(list(data))
                     no_data_count = 0
+                    if len(response) >= ENCODER_FRAME_COUNT * 8:
+                        break
                 else:
                     no_data_count += 1
                     time.sleep(0.001)
-                    if no_data_count >= 2 and response:
+                    # 已收到部分数据但缺尾，等 5ms 仍不齐则放弃（避免拖慢 100Hz 循环）
+                    if response and no_data_count >= 5:
                         break
         return response if response else None
 
@@ -435,9 +455,11 @@ class EncoderReader:
         self.filter_alpha = 0.9
         
         # ----------------【夹爪硬件配置，请修改为你的实际硬件】----------------
-        # STS编码器ID用于控制夹爪
-        self.enc_left_gripper_id  = 7
-        self.enc_right_gripper_id = 15
+        # 编码器 ID 与关节的对应关系（可在 servo_config.ini 的 [encoder_map] 覆盖）
+        self.arm_a_ids = list(DEFAULT_ARM_A_ENCODER_IDS)
+        self.arm_b_ids = list(DEFAULT_ARM_B_ENCODER_IDS)
+        self.left_gripper_id = DEFAULT_LEFT_GRIPPER_ENCODER_ID
+        self.right_gripper_id = DEFAULT_RIGHT_GRIPPER_ENCODER_ID
         # STS编码器摆动角度范围(deg)
         self.enc_min_deg = 0.0
         self.enc_max_deg = 90.0
@@ -470,8 +492,9 @@ class EncoderReader:
         # RLock：parse_data 持锁写角度时，内部还会调用 get_accumulated_position 再次取锁
         self.data_mutex = threading.RLock()
 
-        self.filtered_angle = [0.0]*16 # 一阶低通滤波输出角度(度)
-        self.filter_init_flag = [False]*16 #滤波初始化标记
+        # 按编码器 ID 存储滤波结果，避免依赖帧内顺序
+        self.filtered_angle: Dict[int, float] = {}
+        self.filter_init_flag: Dict[int, bool] = {}
 
         #初始化串口驱动
         self.driver = STSDriver(self.port, self.baudrate)
@@ -551,6 +574,24 @@ class EncoderReader:
     def get_send_frequency(self):
         return self.send_frequency
 
+    @staticmethod
+    def _parse_id_list(text, fallback, expected_len):
+        """解析 "1,2,3..." 形式的 ID 列表，格式不对则回退默认值。"""
+        try:
+            ids = [int(item.strip()) for item in text.split(",") if item.strip()]
+        except ValueError:
+            return list(fallback)
+        if len(ids) != expected_len:
+            return list(fallback)
+        return ids
+
+    @staticmethod
+    def _parse_id(text, fallback):
+        try:
+            return int(str(text).strip())
+        except (TypeError, ValueError):
+            return fallback
+
     def load_config(self):
         if not os.path.exists(self.config_file):
             print("[配置] 无配置文件，使用默认值")
@@ -564,7 +605,21 @@ class EncoderReader:
                 self.direction[sid] = int(config[sec]["direction"])
             except Exception:
                 continue
+        if config.has_section("encoder_map"):
+            mapping = config["encoder_map"]
+            self.arm_a_ids = self._parse_id_list(
+                mapping.get("arm_a", ""), DEFAULT_ARM_A_ENCODER_IDS, 7)
+            self.arm_b_ids = self._parse_id_list(
+                mapping.get("arm_b", ""), DEFAULT_ARM_B_ENCODER_IDS, 7)
+            self.left_gripper_id = self._parse_id(
+                mapping.get("left_gripper", ""), DEFAULT_LEFT_GRIPPER_ENCODER_ID)
+            self.right_gripper_id = self._parse_id(
+                mapping.get("right_gripper", ""), DEFAULT_RIGHT_GRIPPER_ENCODER_ID)
         print(f"[配置] 已加载: {self.config_file}")
+        print(
+            f"[配置] 编码器映射 A臂={self.arm_a_ids} 左夹爪={self.left_gripper_id} "
+            f"B臂={self.arm_b_ids} 右夹爪={self.right_gripper_id}"
+        )
 
     def save_config(self):
         config = configparser.ConfigParser()
@@ -574,6 +629,12 @@ class EncoderReader:
                 "zero_offset_raw": str(self.zero_offset_raw.get(sid, 0)),
                 "direction": str(self.direction.get(sid, 1))
             }
+        config["encoder_map"] = {
+            "arm_a": ",".join(str(i) for i in self.arm_a_ids),
+            "left_gripper": str(self.left_gripper_id),
+            "arm_b": ",".join(str(i) for i in self.arm_b_ids),
+            "right_gripper": str(self.right_gripper_id)
+        }
         with open(self.config_file, "w", encoding="utf-8") as f:
             f.write("# STS编码器配置\n# zero_offset_raw=零点原始值\n# direction=1正向/-1反向\n\n")
             config.write(f)
@@ -631,35 +692,41 @@ class EncoderReader:
             print(f"成功：编码器 {sid} 方向已设为 {new_dir}")
             return True
 
+    def _scan_frame_offsets(self, data: List[int]) -> List[int]:
+        """在字节流中按 FF FF 帧头 + 校验和寻找 8 字节帧，自动跳过噪声和残缺帧。"""
+        offsets = []
+        i = 0
+        limit = len(data) - 8
+        while i <= limit:
+            if data[i] != 0xFF or data[i+1] != 0xFF:
+                i += 1
+                continue
+            if self.enable_checksum and not self.verify_checksum(data, i):
+                i += 1
+                continue
+            offsets.append(i)
+            i += 8
+        return offsets
+
     def parse_data(self, data: List[int]):
         """解析编码器 + 一阶低通滤波（写入受 data_mutex 保护）"""
-        if len(data) != 128: return
-        GROUP = 8
-        valid = True
-        for i in range(len(data)//GROUP):
-            off = i*GROUP
-            if data[off]!=0xFF or data[off+1]!=0xFF:
-                valid=False
-                break
-            if self.enable_checksum and not self.verify_checksum(data, off):
-                valid=False
-                break
-        if not valid: return
+        offsets = self._scan_frame_offsets(data)
+        if len(offsets) < ENCODER_FRAME_COUNT:
+            return
 
         with self.data_mutex:
-            for i in range(len(data)//GROUP):
-                off = i*GROUP
+            for off in offsets[:ENCODER_FRAME_COUNT]:
                 sid = data[off+2]
                 raw = (data[off+6] <<8) | data[off+5]
                 rad = self.get_radian(sid, raw)
                 deg = rad * 180 / math.pi
 
                 # ========= 一阶低通滤波 y = α*x + (1-α)*y_prev =========
-                if not self.filter_init_flag[i]:
-                    self.filtered_angle[i] = deg
-                    self.filter_init_flag[i] = True
+                if not self.filter_init_flag.get(sid):
+                    self.filtered_angle[sid] = deg
+                    self.filter_init_flag[sid] = True
                 else:
-                    self.filtered_angle[i] = self.filter_alpha * deg + (1.0 - self.filter_alpha) * self.filtered_angle[i]
+                    self.filtered_angle[sid] = self.filter_alpha * deg + (1.0 - self.filter_alpha) * self.filtered_angle.get(sid, deg)
 
     def read_loop(self):
         global teleop_interp_a, teleop_interp_b
@@ -674,17 +741,12 @@ class EncoderReader:
                 # =========只有遥操作开启 going=False，才下发从手机械臂指令=========
                 if not going:
                     robot.clear_set()
-                    # 使用【滤波后】角度下发机械臂本体
-                    joint_cmd_1=[
-                        self.filtered_angle[0],self.filtered_angle[1],self.filtered_angle[2],
-                        self.filtered_angle[3],self.filtered_angle[4],self.filtered_angle[5],
-                        self.filtered_angle[6]
-                    ]
-                    joint_cmd_2=[
-                        self.filtered_angle[8],self.filtered_angle[9],self.filtered_angle[10],
-                        self.filtered_angle[11],self.filtered_angle[12],self.filtered_angle[13],
-                        self.filtered_angle[14]
-                    ]
+                    # 使用【滤波后】角度下发机械臂本体（按编码器 ID 映射，不依赖帧内顺序）
+                    with self.data_mutex:
+                        joint_cmd_1 = [self.filtered_angle.get(sid, 0.0) for sid in self.arm_a_ids]
+                        joint_cmd_2 = [self.filtered_angle.get(sid, 0.0) for sid in self.arm_b_ids]
+                        grip_l_deg = self.filtered_angle.get(self.left_gripper_id, 0.0)
+                        grip_r_deg = self.filtered_angle.get(self.right_gripper_id, 0.0)
                     if teleop_interp_a is not None and teleop_interp_b is not None:
                         teleop_interp_a, done_a = step_joint_pose(
                             teleop_interp_a,
@@ -708,8 +770,8 @@ class EncoderReader:
                     now = time.monotonic()
                     if self.gripper_teleop_enable and now >= self.next_gripper_cmd_time:
                         self.next_gripper_cmd_time = now + self.gripper_cmd_period
-                        q_l_norm = abs(self.filtered_angle[7]) / 9.0
-                        q_r_norm = abs(self.filtered_angle[15]) /9.0
+                        q_l_norm = abs(grip_l_deg) / 9.0
+                        q_r_norm = abs(grip_r_deg) / 9.0
                         q_l_norm =max(0.0,min(1.0,q_l_norm))
                         q_r_norm =max(0.0,min(1.0,q_r_norm))
                         q_l_target = -0.15 +q_l_norm *(1.1-(-0.15))
@@ -777,10 +839,10 @@ def main():
             max_err_a = 999.0
             max_err_b = 999.0
             with reader.data_mutex:
-                target_A = reader.filtered_angle[0:7]   # A臂7轴目标
-                target_B = reader.filtered_angle[8:15]  # B臂7轴目标
-                filter_ok_a = all(reader.filter_init_flag[i] for i in range(7))
-                filter_ok_b = all(reader.filter_init_flag[i] for i in range(8,15))
+                target_A = [reader.filtered_angle.get(sid, 0.0) for sid in reader.arm_a_ids]
+                target_B = [reader.filtered_angle.get(sid, 0.0) for sid in reader.arm_b_ids]
+                filter_ok_a = all(reader.filter_init_flag.get(sid, False) for sid in reader.arm_a_ids)
+                filter_ok_b = all(reader.filter_init_flag.get(sid, False) for sid in reader.arm_b_ids)
 
             start_err_a = max_abs_joint_error(a_real, START_POSE_A)
             start_err_b = max_abs_joint_error(b_real, START_POSE_B)
@@ -791,8 +853,8 @@ def main():
 
             # 只有初始化完成才计算误差，否则误差置很大
             if filter_ok_a and filter_ok_b:
-                skeleton_err_a = [abs(a_real[i] - target_A[i]) for i in range(7)]
-                skeleton_err_b = [abs(b_real[i] - target_B[i]) for i in range(7)]
+                skeleton_err_a = [angle_diff_deg(a_real[i], target_A[i]) for i in range(7)]
+                skeleton_err_b = [angle_diff_deg(b_real[i], target_B[i]) for i in range(7)]
                 max_err_a = max(skeleton_err_a)
                 max_err_b = max(skeleton_err_b)
                 if start_pose_ok or teleop_has_started or skeleton_realign_required:
@@ -898,10 +960,9 @@ def main():
                 robot.clear_error('B')
                 robot.send_cmd()
                 time.sleep(1)
-                robot.set_state(arm='A',state=1)
-                robot.set_state(arm='B',state=1)
-                robot.send_cmd()
-                time.sleep(1)
+                # 全程保持 state=3：回Home期间禁止手动拖动，到位后也保持不可拖动
+                set_joint_drag_mode(False)
+                time.sleep(0.2)
 
                 joint_cmd_1 = list(a_real)
                 joint_cmd_2 = list(b_real)

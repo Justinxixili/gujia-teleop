@@ -262,24 +262,30 @@ class EncoderReader:
             print(f"成功：编码器 {sid} 方向已设为 {new_dir}")
             return True
 
+    def _scan_frame_offsets(self, data: List[int]) -> List[int]:
+        """在字节流中按 FF FF 帧头 + 校验和寻找 8 字节帧，自动跳过噪声。"""
+        offsets = []
+        i = 0
+        limit = len(data) - 8
+        while i <= limit:
+            if data[i] != 0xFF or data[i+1] != 0xFF:
+                i += 1
+                continue
+            if self.enable_checksum and not self.verify_checksum(data, i):
+                i += 1
+                continue
+            offsets.append(i)
+            i += 8
+        return offsets
+
     def parse_data(self, data: List[int]):
-        """解析并打印数据"""
-        if len(data) != 128: return
-        GROUP = 8
-        valid = True
-        for i in range(len(data)//GROUP):
-            off = i*GROUP
-            if data[off]!=0xFF or data[off+1]!=0xFF:
-                valid=False
-                break
-            if self.enable_checksum and not self.verify_checksum(data, off):
-                valid=False
-                break
-        if not valid: return
+        """解析并打印数据（容忍噪声和残缺帧）"""
+        offsets = self._scan_frame_offsets(data)
+        if not offsets:
+            return
 
         lines = []
-        for i in range(len(data)//GROUP):
-            off = i*GROUP
+        for off in offsets:
             sid = data[off+2]
             raw = (data[off+6] <<8) | data[off+5]
             rad = self.get_radian(sid, raw)

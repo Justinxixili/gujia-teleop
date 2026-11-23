@@ -12,7 +12,6 @@ GUJIA/
    ├─ fx_robot.py                    机器人控制 SDK 封装
    ├─ fx_kine.py                     运动学计算接口
    ├─ KM_CAN.py                      CAN 电机与夹爪控制
-   ├─ KM_gripper.py                  夹爪控制模块
    ├─ SkeletonCalibration.py         编码器零位/方向校准工具（独立运行）
    ├─ footkeyboard.py                脚踏键盘测试脚本（独立运行）
    ├─ servo_config.ini               编码器零位/方向配置
@@ -57,3 +56,4 @@ python gujiayaocao_0817_frontend.py
 
 - `libMarvinSDK` / `libKine` 为厂商提供的 SDK 动态库。
 - `camera_dataset/` 下的采集结果不纳入版本管理。
+- 编码器 ID 与关节的对应关系见 `servo_config.ini` 的 `[encoder_map]`，默认按 ID 1..16 顺序（A 臂 1–7、左夹爪 8、B 臂 9–15、右夹爪 16）；接线不同时按实际修改。
