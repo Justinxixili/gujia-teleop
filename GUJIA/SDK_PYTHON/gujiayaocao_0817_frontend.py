@@ -401,7 +401,7 @@ class TeleopFrontend(tk.Tk):
         self.sidebar = tk.Frame(self.shell, width=248, bd=0, highlightthickness=1)
         self.sidebar.grid(row=0, column=0, sticky="ns")
         self.sidebar.grid_propagate(False)
-        self.sidebar.rowconfigure(3, weight=1)
+        self.sidebar.rowconfigure(1, weight=1)
 
         self.main = tk.Frame(self.shell, bd=0, highlightthickness=0)
         self.main.grid(row=0, column=1, sticky="nsew")
@@ -426,26 +426,8 @@ class TeleopFrontend(tk.Tk):
         self.sidebar_toggle = ttk.Button(self.sidebar_head, text="<", width=3, command=self._toggle_sidebar)
         self.sidebar_toggle.grid(row=0, column=2, sticky="e")
 
-        self.new_button = ttk.Button(self.sidebar, text="+  新建", command=self._new_session)
-        self.new_button.grid(row=1, column=0, sticky="ew", padx=14, pady=(4, 16))
-
-        self.history_label = tk.Label(self.sidebar, text="历史记录", anchor="w")
-        self.history_label.grid(row=2, column=0, sticky="ew", padx=16)
-
-        self.history_list = tk.Listbox(
-            self.sidebar,
-            height=8,
-            activestyle="none",
-            borderwidth=0,
-            highlightthickness=1,
-            selectborderwidth=0,
-            exportselection=False,
-        )
-        self.history_list.grid(row=3, column=0, sticky="nsew", padx=14, pady=(8, 14))
-        self.history_list.insert(tk.END, "当前会话")
-
         self.sidebar_bottom = tk.Frame(self.sidebar, bd=0, highlightthickness=0)
-        self.sidebar_bottom.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 16))
+        self.sidebar_bottom.grid(row=1, column=0, sticky="sew", padx=14, pady=(0, 16))
         self.sidebar_bottom.columnconfigure(0, weight=1)
         self.settings_button = ttk.Button(self.sidebar_bottom, text="设置", command=self._focus_settings)
         self.settings_button.grid(row=0, column=0, sticky="ew", pady=(0, 8))
@@ -663,15 +645,6 @@ class TeleopFrontend(tk.Tk):
 
         self.logo_mark.configure(bg=palette["accent_bg"], fg=palette["accent"], font=("Microsoft YaHei UI", 14, "bold"))
         self.logo_title.configure(bg=palette["surface"], fg=palette["text"], font=("Microsoft YaHei UI", 11, "bold"))
-        self.history_label.configure(bg=palette["surface"], fg=palette["muted"], font=("Microsoft YaHei UI", 9))
-        self.history_list.configure(
-            bg=palette["surface"],
-            fg=palette["text"],
-            selectbackground=palette["accent_bg"],
-            selectforeground=palette["text"],
-            highlightbackground=palette["border"],
-            font=("Microsoft YaHei UI", 10),
-        )
         self.page_title.configure(bg=palette["bg"], fg=palette["text"], font=("Microsoft YaHei UI", 16, "bold"))
         self.page_subtitle.configure(bg=palette["bg"], fg=palette["muted"], font=("Microsoft YaHei UI", 9))
         self.status_pill.configure(bg=palette["accent_bg"], fg=palette["accent"], font=("Microsoft YaHei UI", 9))
@@ -751,26 +724,14 @@ class TeleopFrontend(tk.Tk):
     def _update_sidebar(self):
         if self.sidebar_collapsed:
             self.logo_title.grid_remove()
-            self.history_label.grid_remove()
-            self.history_list.grid_remove()
-            self.new_button.configure(text="+")
             self.settings_button.configure(text="S")
             self.theme_button.configure(text="L" if self.theme_var.get() == "dark" else "D")
             self.sidebar_toggle.configure(text=">")
         else:
             self.logo_title.grid()
-            self.history_label.grid()
-            self.history_list.grid()
-            self.new_button.configure(text="+  新建")
             self.settings_button.configure(text="设置")
             self.theme_button.configure(text="浅色模式" if self.theme_var.get() == "dark" else "深色模式")
             self.sidebar_toggle.configure(text="<")
-
-    def _new_session(self):
-        self._clear_log()
-        self._reset_alignment_panel()
-        self.history_list.insert(0, time.strftime("会话 %H:%M:%S"))
-        self._append_log("[界面] 已创建新的本地会话。\n")
 
     def _focus_settings(self):
         self.robot_ip_entry.focus_set()
@@ -1134,7 +1095,6 @@ class TeleopFrontend(tk.Tk):
 
         self.reader_thread = threading.Thread(target=self._read_process_output, daemon=True)
         self.reader_thread.start()
-        self.history_list.insert(0, time.strftime("运行 %H:%M:%S"))
         self._append_log(f"[界面] 已启动: PID={self.process.pid}\n")
         self._set_busy(False)
         self._refresh_state()
