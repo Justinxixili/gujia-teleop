@@ -5,6 +5,7 @@
 功能：
 - 通过串口读取 16 路 STS 舵机编码器的原始值（0~4095）
 - 操作人员把每个关节分别转到机械正限位、负限位，程序逐个记录两端原始值
+- 连续跟踪编码器运动增量，按实际运动路径计算中点，行程超过 180° 也能正确计算
 - 自动计算原点（正负限位之间的中点），由操作人员在前端逐个确认
 - 标定结果导出为独立的 .ini 文件
 
@@ -44,6 +45,8 @@ READ_HZ = 50.0
 SMOOTH_WINDOW = 12          # 记录限位时用于平滑的采样点数
 MIN_SMOOTH_SAMPLES = 5      # 至少收到多少个点才允许记录
 MIN_TRAVEL_COUNTS = 8       # 行程过小视为异常（约 0.7°）
+STABLE_TOL_COUNTS = 8       # 记录前最近采样允许的抖动（约 0.7°）
+TRAVEL_LIMIT_COUNTS = ENCODER_RESOLUTION  # 行程上限（一圈）
 
 READ_COMMAND = [
     0xFF, 0xFF, 0xFE, 0x14, 0x82, 0x38, 0x02,
@@ -69,6 +72,8 @@ class JointCalibration:
     spec: JointSpec
     pos_limit: Optional[float] = None
     neg_limit: Optional[float] = None
+    pos_path: Optional[float] = None   # 记录正限位时的累计路径（展开值）
+    neg_path: Optional[float] = None   # 记录负限位时的累计路径（展开值）
     origin: Optional[float] = None
     travel: Optional[int] = None
     confirmed: bool = False
@@ -145,16 +150,12 @@ def counts_to_deg(counts: float) -> float:
     return counts * 360.0 / ENCODER_RESOLUTION
 
 
-def compute_origin(pos_counts: float, neg_counts: float):
-    """由正、负限位原始值计算原点（较短弧的中点）与行程。"""
-    delta = (neg_counts - pos_counts) % ENCODER_RESOLUTION
-    if delta <= ENCODER_RESOLUTION // 2:
-        travel = delta
-        origin = pos_counts + delta / 2.0
-    else:
-        travel = ENCODER_RESOLUTION - delta
-        origin = pos_counts - travel / 2.0
-    return origin % ENCODER_RESOLUTION, travel
+def unwrap_delta(new_raw: int, last_raw: int) -> int:
+    """相邻两帧原始值之差，折算到最短方向（[-2048, 2048)），用于连续累计路径。"""
+    delta = (new_raw - last_raw) % ENCODER_RESOLUTION
+    if delta > ENCODER_RESOLUTION // 2:
+        delta -= ENCODER_RESOLUTION
+    return delta
 
 
 def is_same_file(path_a: str, path_b: str) -> bool:
@@ -264,7 +265,10 @@ class CalibrationApp(tk.Tk):
 
         self.joints = [JointCalibration(spec) for spec in load_joint_specs()]
         self.samples = {joint.sid: deque(maxlen=SMOOTH_WINDOW) for joint in self.joints}
+        self.path_samples = {joint.sid: deque(maxlen=SMOOTH_WINDOW) for joint in self.joints}
         self.latest_raw: Dict[int, int] = {}
+        self.last_raw: Dict[int, int] = {}
+        self.cumulative: Dict[int, float] = {}
         self.row_ui: List[dict] = []
 
         self.message_queue = queue.Queue()
@@ -318,6 +322,14 @@ class CalibrationApp(tk.Tk):
         ttk.Label(
             info,
             text=f"servo_config.ini 只读使用（关节命名）：{SERVO_CONFIG_PATH}",
+            foreground="#68717d",
+        ).pack(side=tk.LEFT)
+
+        hint = ttk.Frame(self, padding=(12, 0, 12, 4))
+        hint.pack(fill=tk.X)
+        ttk.Label(
+            hint,
+            text="记录时请让关节从一个限位连续移动到另一个限位；行程按实际运动路径计算，可超过 180°。",
             foreground="#68717d",
         ).pack(side=tk.LEFT)
 
@@ -408,6 +420,20 @@ class CalibrationApp(tk.Tk):
             return
 
         self.stop_event = threading.Event()
+        self._reset_tracking()
+        while True:
+            try:
+                self.message_queue.get_nowait()
+            except queue.Empty:
+                break
+        for joint in self.joints:
+            if not joint.confirmed and (
+                joint.pos_limit is not None or joint.neg_limit is not None
+            ):
+                # 重新连接后累计路径会重新开始，未确认的旧记录作废
+                joint.pos_limit = joint.neg_limit = None
+                joint.pos_path = joint.neg_path = None
+                joint.origin = joint.travel = None
         self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self.reader_thread.start()
         self.status_var.set(f"已连接 {port} @ {baud}")
@@ -416,6 +442,16 @@ class CalibrationApp(tk.Tk):
         self.port_combo.configure(state=tk.DISABLED)
         self.baud_entry.configure(state=tk.DISABLED)
         self._refresh_all_rows()
+
+    def _reset_tracking(self):
+        """清空相邻帧跟踪状态和累计路径。"""
+        self.latest_raw.clear()
+        self.last_raw.clear()
+        self.cumulative.clear()
+        for samples in self.samples.values():
+            samples.clear()
+        for samples in self.path_samples.values():
+            samples.clear()
 
     def _disconnect(self):
         self.stop_event.set()
@@ -470,6 +506,15 @@ class CalibrationApp(tk.Tk):
             self.latest_raw[sid] = raw
             if sid in self.samples:
                 self.samples[sid].append(raw)
+            previous = self.last_raw.get(sid)
+            if previous is None:
+                cumulative = float(raw)
+            else:
+                cumulative = self.cumulative.get(sid, float(previous)) + unwrap_delta(raw, previous)
+            self.last_raw[sid] = raw
+            self.cumulative[sid] = cumulative
+            if sid in self.path_samples:
+                self.path_samples[sid].append(cumulative)
         for index, joint in enumerate(self.joints):
             raw = self.latest_raw.get(joint.sid)
             ui = self.row_ui[index]
@@ -489,45 +534,76 @@ class CalibrationApp(tk.Tk):
         # 同一个按钮再点一次 = 清空该限位，便于重新测量
         if kind == "pos" and joint.pos_limit is not None:
             joint.pos_limit = None
+            joint.pos_path = None
             self._recompute(joint)
             self._refresh_row(index)
             self._update_summary()
             return
         if kind == "neg" and joint.neg_limit is not None:
             joint.neg_limit = None
+            joint.neg_path = None
             self._recompute(joint)
             self._refresh_row(index)
             self._update_summary()
             return
 
         samples = self.samples.get(joint.sid)
-        if not samples or len(samples) < MIN_SMOOTH_SAMPLES:
+        path_samples = self.path_samples.get(joint.sid)
+        if (
+            not samples
+            or len(samples) < MIN_SMOOTH_SAMPLES
+            or not path_samples
+            or len(path_samples) < MIN_SMOOTH_SAMPLES
+        ):
             messagebox.showwarning(
                 "读数不足",
                 "还没有收到足够的编码器数据，请确认已连接并等待片刻。",
                 parent=self,
             )
             return
-        value = circular_mean(samples)
-        if kind == "pos":
-            joint.pos_limit = value
-        else:
-            joint.neg_limit = value
-        self._recompute(joint)
-        if joint.travel is not None and joint.travel < MIN_TRAVEL_COUNTS:
+        spread = max(path_samples) - min(path_samples)
+        if spread > STABLE_TOL_COUNTS:
             messagebox.showwarning(
-                "行程过小",
-                f"{joint.label} 的正负限位几乎相同"
-                f"（{counts_to_deg(joint.travel):.2f}°），请重新测量。",
+                "读数还在变化",
+                f"{joint.label} 的读数还在变化（最近波动约 {counts_to_deg(spread):.1f}°），"
+                "请等关节停稳后再记录。",
                 parent=self,
             )
+            return
+
+        path_value = sum(path_samples) / len(path_samples)
+        raw_value = circular_mean(samples)
+        if kind == "pos":
+            joint.pos_limit = raw_value
+            joint.pos_path = path_value
+        else:
+            joint.neg_limit = raw_value
+            joint.neg_path = path_value
+        self._recompute(joint)
+        if joint.travel is not None:
+            if joint.travel < MIN_TRAVEL_COUNTS:
+                messagebox.showwarning(
+                    "行程过小",
+                    f"{joint.label} 的正负限位几乎相同"
+                    f"（{counts_to_deg(joint.travel):.2f}°），请重新测量。",
+                    parent=self,
+                )
+            elif joint.travel > TRAVEL_LIMIT_COUNTS:
+                messagebox.showwarning(
+                    "行程异常",
+                    f"{joint.label} 的记录行程超过一圈"
+                    f"（{counts_to_deg(joint.travel):.1f}°），请检查是否绕圈或记录有误。",
+                    parent=self,
+                )
         self._refresh_row(index)
         self._update_summary()
 
     @staticmethod
     def _recompute(joint: JointCalibration):
-        if joint.pos_limit is not None and joint.neg_limit is not None:
-            joint.origin, joint.travel = compute_origin(joint.pos_limit, joint.neg_limit)
+        """按实际运动路径计算中点（展开后的累计值），可正确处理大于 180° 的行程。"""
+        if joint.pos_path is not None and joint.neg_path is not None:
+            joint.travel = int(round(abs(joint.neg_path - joint.pos_path)))
+            joint.origin = ((joint.pos_path + joint.neg_path) / 2.0) % ENCODER_RESOLUTION
         else:
             joint.origin = None
             joint.travel = None
@@ -551,6 +627,8 @@ class CalibrationApp(tk.Tk):
         for joint in self.joints:
             joint.pos_limit = None
             joint.neg_limit = None
+            joint.pos_path = None
+            joint.neg_path = None
             joint.origin = None
             joint.travel = None
             joint.confirmed = False
