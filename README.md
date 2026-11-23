@@ -12,7 +12,6 @@ GUJIA/
    ├─ fx_robot.py                    机器人控制 SDK 封装
    ├─ fx_kine.py                     运动学计算接口
    ├─ KM_CAN.py                      CAN 电机与夹爪控制
-   ├─ SkeletonCalibration.py         编码器零位/方向校准工具（独立运行）
    ├─ CalibrationOfTheOrigin.py      舵机原点标定工具（图形界面，独立运行）
    ├─ footkeyboard.py                脚踏键盘测试脚本（独立运行）
    ├─ servo_config.ini               编码器零位/方向配置
