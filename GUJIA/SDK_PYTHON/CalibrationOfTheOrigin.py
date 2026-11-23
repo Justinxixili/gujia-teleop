@@ -5,7 +5,7 @@
 功能：
 - 通过串口读取 16 路 STS 舵机编码器的原始值（0~4095）
 - 操作人员把每个关节分别转到机械正限位、负限位，程序逐个记录两端原始值
-- 连续跟踪编码器运动增量，按实际运动路径计算中点，行程超过 180° 也能正确计算
+- 连续跟踪编码器运动增量，按实际运动路径计算中点，超过 180° 也能正确计算
 - 自动计算原点（正负限位之间的中点），由操作人员在前端逐个确认
 - 标定结果导出为独立的 .ini 文件
 
@@ -255,7 +255,7 @@ class StsSerialBus:
 # ===================== 界面 =====================
 
 class CalibrationApp(tk.Tk):
-    COLUMNS = ("关节", "ID", "当前原始值", "当前角度", "正限位", "负限位", "行程", "原点", "操作", "状态")
+    COLUMNS = ("关节", "ID", "当前原始值", "当前角度", "正限位(°)", "负限位(°)", "原点", "操作", "状态")
 
     def __init__(self):
         super().__init__()
@@ -329,13 +329,13 @@ class CalibrationApp(tk.Tk):
         hint.pack(fill=tk.X)
         ttk.Label(
             hint,
-            text="记录时请让关节从一个限位连续移动到另一个限位；行程按实际运动路径计算，可超过 180°。",
+            text="记录时请让关节从一个限位连续移动到另一个限位；原点按实际运动路径的中点计算（支持超过 180°）。",
             foreground="#68717d",
         ).pack(side=tk.LEFT)
 
         table = ttk.Frame(self, padding=(12, 8))
         table.pack(fill=tk.BOTH, expand=True)
-        widths = (10, 5, 10, 9, 8, 8, 9, 8, 23, 12)
+        widths = (10, 5, 10, 9, 11, 11, 8, 23, 12)
         for col, text in enumerate(self.COLUMNS):
             ttk.Label(table, text=text, style="Header.TLabel").grid(
                 row=0, column=col, sticky="w", padx=6, pady=(2, 6)
@@ -359,13 +359,11 @@ class CalibrationApp(tk.Tk):
             ttk.Label(table, textvariable=ui["pos"]).grid(row=row, column=4, sticky="w", padx=6, pady=3)
             ui["neg"] = tk.StringVar(value="--")
             ttk.Label(table, textvariable=ui["neg"]).grid(row=row, column=5, sticky="w", padx=6, pady=3)
-            ui["travel"] = tk.StringVar(value="--")
-            ttk.Label(table, textvariable=ui["travel"]).grid(row=row, column=6, sticky="w", padx=6, pady=3)
             ui["origin"] = tk.StringVar(value="--")
-            ttk.Label(table, textvariable=ui["origin"]).grid(row=row, column=7, sticky="w", padx=6, pady=3)
+            ttk.Label(table, textvariable=ui["origin"]).grid(row=row, column=6, sticky="w", padx=6, pady=3)
 
             actions = ttk.Frame(table)
-            actions.grid(row=row, column=8, sticky="w", padx=6, pady=3)
+            actions.grid(row=row, column=7, sticky="w", padx=6, pady=3)
             button_pos = ttk.Button(actions, text="记正限位", width=10,
                                     command=lambda i=index: self._record_limit(i, "pos"))
             button_pos.pack(side=tk.LEFT, padx=(0, 4))
@@ -378,7 +376,7 @@ class CalibrationApp(tk.Tk):
             ui["buttons"] = (button_pos, button_neg, button_confirm)
 
             ui["status"] = tk.StringVar(value="待测正限位")
-            ttk.Label(table, textvariable=ui["status"]).grid(row=row, column=9, sticky="w", padx=6, pady=3)
+            ttk.Label(table, textvariable=ui["status"]).grid(row=row, column=8, sticky="w", padx=6, pady=3)
 
             self.row_ui.append(ui)
 
@@ -639,15 +637,11 @@ class CalibrationApp(tk.Tk):
     def _refresh_row(self, index: int):
         joint = self.joints[index]
         ui = self.row_ui[index]
-        fmt_raw = lambda value: "--" if value is None else f"{value:.0f}"
-        ui["pos"].set(fmt_raw(joint.pos_limit))
-        ui["neg"].set(fmt_raw(joint.neg_limit))
-        if joint.origin is not None and joint.travel is not None:
-            ui["origin"].set(f"{joint.origin:.0f}")
-            ui["travel"].set(f"{counts_to_deg(joint.travel):.1f}°")
-        else:
-            ui["origin"].set("--")
-            ui["travel"].set("--")
+        # 限位按度数显示；原点保留原始计数，方便与 servo_config.ini 对照
+        fmt_deg = lambda value: "--" if value is None else f"{counts_to_deg(value):.1f}°"
+        ui["pos"].set(fmt_deg(joint.pos_limit))
+        ui["neg"].set(fmt_deg(joint.neg_limit))
+        ui["origin"].set("--" if joint.origin is None else f"{joint.origin:.0f}")
 
         button_pos, button_neg, button_confirm = ui["buttons"]
         can_record = self.bus.connected and not joint.confirmed
@@ -743,8 +737,9 @@ class CalibrationApp(tk.Tk):
             lines.append(f"[{joint.sid}]")
             lines.append(f"zero_offset_raw = {origin_int}")
             lines.append(
-                f"# 关节={joint.label} 正限位={joint.pos_limit:.0f} "
-                f"负限位={joint.neg_limit:.0f} 行程={counts_to_deg(joint.travel):.1f}°"
+                f"# 关节={joint.label} "
+                f"正限位={joint.pos_limit:.0f}({counts_to_deg(joint.pos_limit):.1f}°) "
+                f"负限位={joint.neg_limit:.0f}({counts_to_deg(joint.neg_limit):.1f}°)"
             )
             lines.append("")
 
