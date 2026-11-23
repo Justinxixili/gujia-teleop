@@ -80,8 +80,8 @@ python CalibrationOfTheOrigin.py
 
 ```ini
 [right]
-closed_raw = 771   # 完全闭合时的编码器原始值
-open_raw = 647     # 完全张开时的编码器原始值
+closed_raw = 836   # 完全闭合时的编码器原始值
+open_raw = 652     # 完全张开时的编码器原始值
 target_closed = -0.15
 target_open = 1.1
 ```
