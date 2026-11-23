@@ -1,0 +1,8 @@
+# 运行依赖
+# 安装：pip install -r requirements.txt
+
+pynput            # 键盘/脚踏监听与按键发送
+numpy             # KM_CAN 电机通信数组运算
+pyserial          # 编码器串口通信
+Pillow            # 相机画面显示与保存
+pyrealsense2      # RealSense 相机（仅相机功能需要，可单独安装）

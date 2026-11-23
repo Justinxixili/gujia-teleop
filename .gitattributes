@@ -1,0 +1,10 @@
+# 统一换行符，避免 Windows 下出现 LF/CRLF 混合
+* text=auto
+*.bat text eol=crlf
+*.py text eol=lf
+
+# 二进制文件
+*.dll binary
+*.so binary
+*.jpg binary
+*.png binary

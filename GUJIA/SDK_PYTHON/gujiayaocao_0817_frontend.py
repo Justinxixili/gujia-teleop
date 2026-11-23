@@ -334,7 +334,6 @@ class TeleopFrontend(tk.Tk):
         self.sidebar_collapsed = False
         self.busy = False
         self.alignment_cells = {}
-        self.text_widgets = []
         self.camera_hub = None
         self.camera_thread = None
         self.camera_stop_event = threading.Event()
@@ -525,6 +524,10 @@ class TeleopFrontend(tk.Tk):
         self.camera_panel.grid(row=2, column=0, sticky="ew", pady=(0, 18))
         self._build_camera_panel(self.camera_panel)
 
+        self.log_panel = tk.Frame(self.center, bd=0, highlightthickness=1)
+        self.log_panel.grid(row=3, column=0, sticky="ew", pady=(0, 18))
+        self._build_log_panel(self.log_panel)
+
     def _build_alignment_panel(self, parent):
         parent.columnconfigure(0, weight=1)
         head = tk.Frame(parent, bd=0, highlightthickness=0)
@@ -607,6 +610,26 @@ class TeleopFrontend(tk.Tk):
         )
         self.camera_view.grid(row=0, column=0, sticky="nsew")
 
+    def _build_log_panel(self, parent):
+        parent.columnconfigure(0, weight=1)
+        head = tk.Frame(parent, bd=0, highlightthickness=0)
+        head.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 8))
+        head.columnconfigure(1, weight=1)
+        self.log_title = tk.Label(head, text="运行日志", anchor="w")
+        self.log_title.grid(row=0, column=0, sticky="w", padx=(0, 12))
+        self.log_hint = tk.Label(head, text="控制脚本输出与界面操作记录", anchor="w")
+        self.log_hint.grid(row=0, column=1, sticky="ew")
+
+        body = tk.Frame(parent, bd=0, highlightthickness=0)
+        body.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 14))
+        body.columnconfigure(0, weight=1)
+
+        self.log_text = tk.Text(body, height=9, wrap="word", bd=0, highlightthickness=0, state=tk.DISABLED)
+        self.log_text.grid(row=0, column=0, sticky="ew")
+        log_scroll = ttk.Scrollbar(body, orient=tk.VERTICAL, command=self.log_text.yview)
+        log_scroll.grid(row=0, column=1, sticky="ns")
+        self.log_text.configure(yscrollcommand=log_scroll.set)
+
     def _apply_theme(self):
         palette = self._palette()
         self.configure(bg=palette["bg"])
@@ -640,7 +663,7 @@ class TeleopFrontend(tk.Tk):
             widget.configure(bg=palette["bg"])
         for widget in (self.sidebar, self.sidebar_head, self.sidebar_bottom):
             widget.configure(bg=palette["surface"], highlightbackground=palette["border"])
-        for widget in (self.teleop_panel, self.config_panel, self.alignment_panel, self.camera_panel, self.welcome, self.quick_actions):
+        for widget in (self.teleop_panel, self.config_panel, self.alignment_panel, self.camera_panel, self.log_panel, self.welcome, self.quick_actions):
             widget.configure(bg=palette["surface"], highlightbackground=palette["border"], highlightcolor=palette["accent"])
 
         self.logo_mark.configure(bg=palette["accent_bg"], fg=palette["accent"], font=("Microsoft YaHei UI", 14, "bold"))
@@ -671,19 +694,31 @@ class TeleopFrontend(tk.Tk):
             self.camera_status,
             self.camera_info,
             self.camera_view,
+            self.log_title,
+            self.log_hint,
         )
         for label in panel_labels:
             label.configure(bg=palette["surface"], fg=palette["text"])
         self.alignment_title.configure(font=("Microsoft YaHei UI", 11, "bold"))
         self.camera_title.configure(font=("Microsoft YaHei UI", 11, "bold"))
+        self.log_title.configure(font=("Microsoft YaHei UI", 11, "bold"))
+        self.log_hint.configure(fg=palette["muted"], font=("Microsoft YaHei UI", 9))
         self.camera_view_frame.configure(bg=palette["surface_alt"])
         self.camera_view.configure(bg=palette["surface_alt"], fg=palette["muted"], font=("Microsoft YaHei UI", 10))
         for label in (self.alignment_summary, self.arm_a_label, self.arm_b_label, self.camera_status, self.camera_info):
             label.configure(fg=palette["muted"], font=("Microsoft YaHei UI", 9))
-        for panel in (self.alignment_panel, self.camera_panel):
+        for panel in (self.alignment_panel, self.camera_panel, self.log_panel):
             for child in panel.winfo_children():
                 if isinstance(child, tk.Frame):
                     child.configure(bg=palette["surface"])
+        self.log_text.configure(
+            bg=palette["surface_alt"],
+            fg=palette["text"],
+            insertbackground=palette["text"],
+            selectbackground=palette["accent_bg"],
+            selectforeground=palette["text"],
+            font=("Consolas", 9),
+        )
         self.camera_view_frame.configure(bg=palette["surface_alt"])
 
     def _layout_center(self, _event=None):
@@ -775,17 +810,30 @@ class TeleopFrontend(tk.Tk):
         hub = RealSenseCameraHub(width=640, height=480, fps=30)
         starter = threading.Thread(target=self._camera_start_worker, args=(hub,), daemon=True)
         starter.start()
-        return
+
+    def _camera_start_worker(self, hub):
         try:
             meta = hub.start()
         except Exception as exc:
-            self.camera_status_var.set("相机启动失败")
-            self.camera_start_button.configure(state=tk.NORMAL)
-            self.camera_view.configure(image="", text=f"相机启动失败\n{exc}")
-            self._show_notice(f"相机启动失败: {exc}")
-            self._append_log(f"[相机] 启动失败: {exc}\n")
+            try:
+                hub.stop()
+            except Exception:
+                pass
+            self.after(0, self._camera_start_failed, str(exc))
             return
+        self.after(0, self._camera_start_succeeded, hub, meta)
 
+    def _camera_start_failed(self, error):
+        self.camera_status_var.set("相机启动失败")
+        self.camera_start_button.configure(state=tk.NORMAL)
+        self.camera_stop_button.configure(state=tk.DISABLED)
+        self.camera_capture_button.configure(state=tk.DISABLED)
+        self.camera_swap_button.configure(state=tk.DISABLED)
+        self.camera_view.configure(image="", text=f"相机启动失败\n{error}")
+        self._show_notice(f"相机启动失败: {error}")
+        self._append_log(f"[相机] 启动失败: {error}\n")
+
+    def _camera_start_succeeded(self, hub, meta):
         self.camera_hub = hub
         self.camera_latest_meta = meta
         with self.camera_frames_lock:
@@ -804,49 +852,6 @@ class TeleopFrontend(tk.Tk):
         self.camera_capture_button.configure(state=tk.NORMAL)
         self.camera_swap_button.configure(state=tk.NORMAL if "left_wrist" in meta and "right_wrist" in meta else tk.DISABLED)
         self._append_log(f"[相机] 已启动: {self.camera_info_var.get()}\n")
-        self._update_camera_preview()
-
-    def _camera_start_worker(self, hub):
-        try:
-            meta = hub.start()
-        except Exception as exc:
-            try:
-                hub.stop()
-            except Exception:
-                pass
-            self.after(0, self._camera_start_failed, str(exc))
-            return
-        self.after(0, self._camera_start_succeeded, hub, meta)
-
-    def _camera_start_failed(self, error):
-        self.camera_status_var.set("Camera start failed")
-        self.camera_start_button.configure(state=tk.NORMAL)
-        self.camera_stop_button.configure(state=tk.DISABLED)
-        self.camera_capture_button.configure(state=tk.DISABLED)
-        self.camera_swap_button.configure(state=tk.DISABLED)
-        self.camera_view.configure(image="", text=f"Camera start failed\n{error}")
-        self._show_notice(f"Camera start failed: {error}")
-        self._append_log(f"[camera] start failed: {error}\n")
-
-    def _camera_start_succeeded(self, hub, meta):
-        self.camera_hub = hub
-        self.camera_latest_meta = meta
-        with self.camera_frames_lock:
-            self.camera_latest_frames = {
-                role: frame.copy()
-                for role, frame in hub.latest_frames.items()
-                if frame is not None
-            }
-        self.camera_stop_event = threading.Event()
-        self.camera_running = True
-        self.camera_thread = threading.Thread(target=self._camera_read_loop, daemon=True)
-        self.camera_thread.start()
-        self.camera_status_var.set("Camera running")
-        self.camera_info_var.set(self._format_camera_info(meta))
-        self.camera_stop_button.configure(state=tk.NORMAL)
-        self.camera_capture_button.configure(state=tk.NORMAL)
-        self.camera_swap_button.configure(state=tk.NORMAL if "left_wrist" in meta and "right_wrist" in meta else tk.DISABLED)
-        self._append_log(f"[camera] started: {self.camera_info_var.get()}\n")
         self._update_camera_preview()
 
     def _stop_cameras(self, quiet=False):
@@ -1272,13 +1277,6 @@ class TeleopFrontend(tk.Tk):
         self.log_text.configure(state=tk.NORMAL)
         self.log_text.insert(tk.END, text)
         self.log_text.see(tk.END)
-        self.log_text.configure(state=tk.DISABLED)
-
-    def _clear_log(self):
-        if not hasattr(self, "log_text"):
-            return
-        self.log_text.configure(state=tk.NORMAL)
-        self.log_text.delete("1.0", tk.END)
         self.log_text.configure(state=tk.DISABLED)
 
     def _on_close(self):

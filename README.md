@@ -13,8 +13,10 @@ GUJIA/
    ├─ fx_kine.py                     运动学计算接口
    ├─ KM_CAN.py                      CAN 电机与夹爪控制
    ├─ KM_gripper.py                  夹爪控制模块
+   ├─ SkeletonCalibration.py         编码器零位/方向校准工具（独立运行）
    ├─ footkeyboard.py                脚踏键盘测试脚本（独立运行）
    ├─ servo_config.ini               编码器零位/方向配置
+   ├─ requirements.txt               Python 依赖
    ├─ libMarvinSDK.dll / .so         机器人控制动态库
    ├─ libKine.dll / .so              运动学动态库
    ├─ start_gujiayaocao_frontend.bat Windows 启动脚本
@@ -41,7 +43,7 @@ start_gujiayaocao_frontend.bat
 python gujiayaocao_0817_frontend.py
 ```
 
-依赖：`pynput`、`numpy`、`pyserial`、`Pillow`、`pyrealsense2`（相机功能需要）。
+依赖：`pip install -r GUJIA/SDK_PYTHON/requirements.txt`（相机功能另需 `pyrealsense2`）。
 
 控制脚本通过环境变量接收参数：
 

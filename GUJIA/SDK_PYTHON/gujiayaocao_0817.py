@@ -11,15 +11,27 @@ from typing import Optional, List, Dict
 import signal
 import logging
 from pynput import keyboard
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-sys.path.insert(0, parent_dir)
-current_file_path = os.path.abspath(__file__)
-current_path = os.path.dirname(current_file_path)
+# 保证无论从哪个目录启动，都能以 SDK_PYTHON 包的相对方式导入 fx_robot
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_SCRIPT_DIR))
 from SDK_PYTHON.fx_robot import Marvin_Robot, DCSS
 
 ROBOT_IP = os.environ.get("GUJIAYAOCAO_ROBOT_IP", "192.168.1.190")
-ENCODER_PORT = os.environ.get("GUJIAYAOCAO_ENCODER_PORT", "/dev/ttyACM0")
+
+
+def _default_encoder_port():
+    """未显式配置串口时，按平台自动选择。"""
+    if os.name == "nt":
+        ports = list(serial.tools.list_ports.comports())
+        return ports[0].device if ports else "COM3"
+    for candidate in ("/dev/ttyUSB0", "/dev/ttyACM0"):
+        if os.path.exists(candidate):
+            return candidate
+    ports = list(serial.tools.list_ports.comports())
+    return ports[0].device if ports else "/dev/ttyUSB0"
+
+
+ENCODER_PORT = os.environ.get("GUJIAYAOCAO_ENCODER_PORT") or _default_encoder_port()
 ENCODER_BAUDRATE = int(os.environ.get("GUJIAYAOCAO_ENCODER_BAUDRATE", "1000000"))
 
 # START_POSE_A = [90.0, -90.0, -90.0, -90.0, 0.0, 0.0, 0.0]
@@ -39,13 +51,6 @@ ALIGN_STAGE_SKELETON = "skeleton"
 ALIGN_STAGE_READY = "ready"
 
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-sys.path.insert(0, parent_dir)
-current_file_path = os.path.abspath(__file__)
-current_path = os.path.dirname(current_file_path)
-
-from SDK_PYTHON.fx_robot import Marvin_Robot, DCSS
 # =====================【新增：导入达妙电机库】=====================
 from KM_CAN import (
     Motor, KMGripperControl, KM_Motor_Type, Control_Type, ERROR_MESSAGES
@@ -70,10 +75,7 @@ home_running = False
 teleop_interp_a = None
 teleop_interp_b = None
 
-# 脚踏按键映射：左=s，右=d
-KEY_LEFT  = keyboard.KeyCode(char='s')
-KEY_MID   = keyboard.KeyCode(char='q')
-KEY_RIGHT = keyboard.KeyCode(char='d')
+# 脚踏按键映射：左=s，中=q，右=d（见 get_pedal_name）
 
 
 def get_pedal_name(key):
@@ -98,6 +100,13 @@ def consume_pedal_press(name):
         pressed = pedal_press_latch[name]
         pedal_press_latch[name] = False
         return pressed
+
+
+def clear_pedal_latches():
+    """清空踏板按下锁存，丢弃长操作期间的误触。"""
+    with pedal_lock:
+        for name in pedal_press_latch:
+            pedal_press_latch[name] = False
 
 
 def max_abs_joint_error(actual, target):
@@ -303,7 +312,10 @@ robot.clear_set()
 robot.set_drag_space(arm='A',dgType=1)
 robot.set_drag_space(arm='B',dgType=1)
 robot.send_cmd()
-logger.info("已进入关节拖动模式。请手动拖动到：L/A=[90,-90,-90,-90,0,0,0]，R/B=[-90,-90,90,-90,0,0,0]，误差需在±2°内。")
+logger.info(
+    f"已进入关节拖动模式。请手动拖动到：L/A={format_joint_list(START_POSE_A)}，"
+    f"R/B={format_joint_list(START_POSE_B)}，误差需在±{START_POSE_TOL_DEG:.1f}°内。"
+)
 time.sleep(0.5)
 
 
@@ -405,7 +417,6 @@ class EncoderReader:
         self.port = ENCODER_PORT
         self.baudrate = ENCODER_BAUDRATE
         self.send_frequency = 100.0
-        self.filter_id = 0
         self.enable_checksum = True
         self.encoder_resolution = 4096
       
@@ -456,9 +467,9 @@ class EncoderReader:
         self.accumulated_position: Dict[int, int] = {}
         self.zero_offset_raw: Dict[int, int] = {}
         self.direction: Dict[int, int] = {}
-        self.data_mutex = threading.Lock()
+        # RLock：parse_data 持锁写角度时，内部还会调用 get_accumulated_position 再次取锁
+        self.data_mutex = threading.RLock()
 
-        self.angle = [0.0]*16          # 原始角度(度)
         self.filtered_angle = [0.0]*16 # 一阶低通滤波输出角度(度)
         self.filter_init_flag = [False]*16 #滤波初始化标记
 
@@ -531,7 +542,6 @@ class EncoderReader:
     # =============================================================
 
     def get_robot_real_joint(self):
-        global dcss
         armA_data = dcss.m_Out[0]
         armB_data = dcss.m_Out[1]
         a_real = [armA_data.m_FB_Joint_Pos[i] for i in range(7)]
@@ -552,7 +562,7 @@ class EncoderReader:
                 sid = int(sec)
                 self.zero_offset_raw[sid] = int(config[sec]["zero_offset_raw"])
                 self.direction[sid] = int(config[sec]["direction"])
-            except:
+            except Exception:
                 continue
         print(f"[配置] 已加载: {self.config_file}")
 
@@ -622,7 +632,7 @@ class EncoderReader:
             return True
 
     def parse_data(self, data: List[int]):
-        """解析编码器 + 一阶低通滤波"""
+        """解析编码器 + 一阶低通滤波（写入受 data_mutex 保护）"""
         if len(data) != 128: return
         GROUP = 8
         valid = True
@@ -636,25 +646,23 @@ class EncoderReader:
                 break
         if not valid: return
 
-        for i in range(len(data)//GROUP):
-            off = i*GROUP
-            sid = data[off+2]
-            raw = (data[off+6] <<8) | data[off+5]
-            rad = self.get_radian(sid, raw)
-            deg = rad * 180 / math.pi
-            self.angle[i] = deg
-           
-            # ========= 一阶低通滤波 y = α*x + (1-α)*y_prev =========
-            if not self.filter_init_flag[i]:
-                self.filtered_angle[i] = deg
-                self.filter_init_flag[i] = True
-            else:
-                self.filtered_angle[i] = self.filter_alpha * deg + (1.0 - self.filter_alpha) * self.filtered_angle[i]
+        with self.data_mutex:
+            for i in range(len(data)//GROUP):
+                off = i*GROUP
+                sid = data[off+2]
+                raw = (data[off+6] <<8) | data[off+5]
+                rad = self.get_radian(sid, raw)
+                deg = rad * 180 / math.pi
 
-            if self.filter_id !=0 and sid != self.filter_id:
-                continue       
+                # ========= 一阶低通滤波 y = α*x + (1-α)*y_prev =========
+                if not self.filter_init_flag[i]:
+                    self.filtered_angle[i] = deg
+                    self.filter_init_flag[i] = True
+                else:
+                    self.filtered_angle[i] = self.filter_alpha * deg + (1.0 - self.filter_alpha) * self.filtered_angle[i]
+
     def read_loop(self):
-        global running, dcss, going, teleop_interp_a, teleop_interp_b
+        global teleop_interp_a, teleop_interp_b
         while running:
             period = 1.0 / self.get_send_frequency()
             start = time.time()
@@ -725,11 +733,6 @@ class EncoderReader:
             sleep_time = max(0, period - elapsed)
             time.sleep(sleep_time)
 
-    def cmd_loop(self):
-        global running
-        while running:
-            time.sleep(0.2)
-            
 def main():
     global running, going, home_running, teleop_interp_a, teleop_interp_b
     reader = None
@@ -742,9 +745,7 @@ def main():
         reader = EncoderReader()
         reader.gripper_enable_all()
         t1 = threading.Thread(target=reader.read_loop, daemon=True)
-        t2 = threading.Thread(target=reader.cmd_loop, daemon=True)
         t1.start()
-        t2.start()
 
         # 后台启动脚踏键盘监听
         listener = keyboard.Listener(on_press=on_key_press, on_release=on_key_release)
@@ -889,6 +890,8 @@ def main():
                 teleop_interp_a = None
                 teleop_interp_b = None
                 home_running = True
+                # 丢弃回Home过程中被锁存的踏板误触，避免结束后立刻触发遥操
+                clear_pedal_latches()
                 print("【左踏板按下】执行回Home点位")
                 robot.clear_set()
                 robot.clear_error('A')
@@ -958,6 +961,7 @@ def main():
                 skeleton_realign_required = False
                 skeleton_aligned_a = [False] * 7
                 skeleton_aligned_b = [False] * 7
+                clear_pedal_latches()
                 continue
                 # 右踏板 d：边沿触发，按下瞬间开启摇操遥操作
             if right_pressed is True:
