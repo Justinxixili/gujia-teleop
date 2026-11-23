@@ -333,7 +333,9 @@ class CalibrationApp(tk.Tk):
         for index, joint in enumerate(self.joints):
             row = index + 1
             ui = {}
-            ttk.Label(table, text=joint.label).grid(row=row, column=0, sticky="w", padx=6, pady=3)
+            name_label = ttk.Label(table, text=joint.label)
+            name_label.grid(row=row, column=0, sticky="w", padx=6, pady=3)
+            ui["name"] = name_label
             ttk.Label(table, text=str(joint.sid)).grid(row=row, column=1, sticky="w", padx=6, pady=3)
 
             ui["raw"] = tk.StringVar(value="--")
@@ -352,10 +354,10 @@ class CalibrationApp(tk.Tk):
 
             actions = ttk.Frame(table)
             actions.grid(row=row, column=8, sticky="w", padx=6, pady=3)
-            button_pos = ttk.Button(actions, text="记正限位", width=9,
+            button_pos = ttk.Button(actions, text="记正限位", width=10,
                                     command=lambda i=index: self._record_limit(i, "pos"))
             button_pos.pack(side=tk.LEFT, padx=(0, 4))
-            button_neg = ttk.Button(actions, text="记负限位", width=9,
+            button_neg = ttk.Button(actions, text="记负限位", width=10,
                                     command=lambda i=index: self._record_limit(i, "neg"))
             button_neg.pack(side=tk.LEFT, padx=(0, 4))
             button_confirm = ttk.Button(actions, text="确认", width=8,
@@ -483,6 +485,21 @@ class CalibrationApp(tk.Tk):
         joint = self.joints[index]
         if joint.confirmed:
             return
+
+        # 同一个按钮再点一次 = 清空该限位，便于重新测量
+        if kind == "pos" and joint.pos_limit is not None:
+            joint.pos_limit = None
+            self._recompute(joint)
+            self._refresh_row(index)
+            self._update_summary()
+            return
+        if kind == "neg" and joint.neg_limit is not None:
+            joint.neg_limit = None
+            self._recompute(joint)
+            self._refresh_row(index)
+            self._update_summary()
+            return
+
         samples = self.samples.get(joint.sid)
         if not samples or len(samples) < MIN_SMOOTH_SAMPLES:
             messagebox.showwarning(
@@ -496,18 +513,24 @@ class CalibrationApp(tk.Tk):
             joint.pos_limit = value
         else:
             joint.neg_limit = value
-
-        if joint.pos_limit is not None and joint.neg_limit is not None:
-            joint.origin, joint.travel = compute_origin(joint.pos_limit, joint.neg_limit)
-            if joint.travel < MIN_TRAVEL_COUNTS:
-                messagebox.showwarning(
-                    "行程过小",
-                    f"{joint.label} 的正负限位几乎相同"
-                    f"（{counts_to_deg(joint.travel):.2f}°），请重新测量。",
-                    parent=self,
-                )
+        self._recompute(joint)
+        if joint.travel is not None and joint.travel < MIN_TRAVEL_COUNTS:
+            messagebox.showwarning(
+                "行程过小",
+                f"{joint.label} 的正负限位几乎相同"
+                f"（{counts_to_deg(joint.travel):.2f}°），请重新测量。",
+                parent=self,
+            )
         self._refresh_row(index)
         self._update_summary()
+
+    @staticmethod
+    def _recompute(joint: JointCalibration):
+        if joint.pos_limit is not None and joint.neg_limit is not None:
+            joint.origin, joint.travel = compute_origin(joint.pos_limit, joint.neg_limit)
+        else:
+            joint.origin = None
+            joint.travel = None
 
     def _toggle_confirm(self, index: int):
         joint = self.joints[index]
@@ -551,8 +574,23 @@ class CalibrationApp(tk.Tk):
         button_pos, button_neg, button_confirm = ui["buttons"]
         can_record = self.bus.connected and not joint.confirmed
         record_state = tk.NORMAL if can_record else tk.DISABLED
-        button_pos.configure(state=record_state)
-        button_neg.configure(state=record_state)
+        button_pos.configure(
+            text="清空正限位" if joint.pos_limit is not None else "记正限位",
+            state=record_state,
+        )
+        button_neg.configure(
+            text="清空负限位" if joint.neg_limit is not None else "记负限位",
+            state=record_state,
+        )
+
+        # 关节名称颜色：已记一个限位=蓝色，正负限位都记录=绿色
+        if joint.pos_limit is not None and joint.neg_limit is not None:
+            name_color = "#1f8b4c"
+        elif joint.pos_limit is not None or joint.neg_limit is not None:
+            name_color = "#1c6fd8"
+        else:
+            name_color = "#20252d"
+        ui["name"].configure(foreground=name_color)
 
         button_confirm.configure(text="取消确认" if joint.confirmed else "确认")
         if joint.confirmed:
