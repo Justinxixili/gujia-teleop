@@ -157,6 +157,14 @@ def compute_origin(pos_counts: float, neg_counts: float):
     return origin % ENCODER_RESOLUTION, travel
 
 
+def is_same_file(path_a: str, path_b: str) -> bool:
+    """判断两个路径是否指向同一文件（兼容 Windows 大小写不敏感和短路径）。"""
+    try:
+        return os.path.samefile(path_a, path_b)
+    except OSError:
+        return os.path.normcase(os.path.abspath(path_a)) == os.path.normcase(os.path.abspath(path_b))
+
+
 def verify_checksum(data, offset: int) -> bool:
     if offset + 7 >= len(data):
         return False
@@ -599,7 +607,7 @@ class CalibrationApp(tk.Tk):
         )
         if not path:
             return
-        if os.path.abspath(path) == os.path.abspath(SERVO_CONFIG_PATH):
+        if is_same_file(path, SERVO_CONFIG_PATH):
             messagebox.showerror(
                 "禁止覆盖",
                 "servo_config.ini 只能读取，禁止写入。请选择其他保存位置。",
