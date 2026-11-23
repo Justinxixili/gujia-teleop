@@ -16,6 +16,7 @@ GUJIA/
    ├─ CalibrationOfTheOrigin.py      舵机原点标定工具（图形界面，独立运行）
    ├─ footkeyboard.py                脚踏键盘测试脚本（独立运行）
    ├─ servo_config.ini               编码器零位/方向配置
+   ├─ gripper_config.ini             夹爪张开/闭合端点映射
    ├─ requirements.txt               Python 依赖
    ├─ libMarvinSDK.dll / .so         机器人控制动态库
    ├─ libKine.dll / .so              运动学动态库
@@ -72,3 +73,20 @@ python CalibrationOfTheOrigin.py
 原点按编码器的实际运动路径中点计算，超过 180° 的关节也能正确标定。记录时请让关节从一个限位连续移动到另一个限位，中途不要绕圈；记录完成后，界面上的正/负限位角度以标定原点为零点显示，便于和额定关节范围对照。
 
 注意：`servo_config.ini` **只读**，标定程序不会修改它；导出文件需人工核对后再合并。
+
+## 夹爪映射
+
+摇操中的夹爪不使用关节的中点原点，而是按 `gripper_config.ini` 里的张开/闭合原始值做线性映射：
+
+```ini
+[right]
+closed_raw = 771   # 完全闭合时的编码器原始值
+open_raw = 647     # 完全张开时的编码器原始值
+target_closed = -0.15
+target_open = 1.1
+```
+
+- 没有配置或两端相同的夹爪会退回旧的 `abs(角度)/9` 归一化；
+- `servo_config.ini` 只读，夹爪端点单独放在这个文件里；
+- 若张开/闭合方向相反，互换 `target_closed` 与 `target_open` 即可。
+

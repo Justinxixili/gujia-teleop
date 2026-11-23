@@ -16,6 +16,8 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_SCRIPT_DIR))
 from SDK_PYTHON.fx_robot import Marvin_Robot, DCSS
 
+GRIPPER_CONFIG_PATH = os.path.join(_SCRIPT_DIR, "gripper_config.ini")
+
 ROBOT_IP = os.environ.get("GUJIAYAOCAO_ROBOT_IP", "192.168.1.190")
 
 
@@ -499,6 +501,7 @@ class EncoderReader:
         #初始化串口驱动
         self.driver = STSDriver(self.port, self.baudrate)
         self.load_config()
+        self.load_gripper_config()
 
         # =====================【初始化夹爪控制器】=====================
         self.gripper_ctrl = KMGripperControl(robot=robot)
@@ -530,6 +533,70 @@ class EncoderReader:
         norm = (enc_clamp - self.enc_min_deg)/(self.enc_max_deg - self.enc_min_deg)
         q_target = norm * (self.gripper_qmax - self.gripper_qmin) + self.gripper_qmin
         return max(self.gripper_qmin, min(self.gripper_qmax, q_target))
+
+    def load_gripper_config(self):
+        """读取夹爪端点映射（gripper_config.ini），按实际闭合/张开原始值归一化。"""
+        self.gripper_config = {}
+        if not os.path.isfile(GRIPPER_CONFIG_PATH):
+            return
+        config = configparser.ConfigParser()
+        try:
+            config.read(GRIPPER_CONFIG_PATH, encoding="utf-8")
+        except Exception as exc:
+            print(f"[夹爪配置] 读取失败，使用旧的 abs/9 归一化: {exc}")
+            return
+        for side, sid in (("left", self.left_gripper_id), ("right", self.right_gripper_id)):
+            if not config.has_section(side):
+                continue
+            try:
+                closed_raw = int(config[side]["closed_raw"])
+                open_raw = int(config[side]["open_raw"])
+            except (KeyError, ValueError):
+                continue
+            if closed_raw == open_raw:
+                continue
+            self.gripper_config[side] = {
+                "sid": sid,
+                "closed_raw": closed_raw,
+                "open_raw": open_raw,
+                "target_closed": float(config[side].get("target_closed", "-0.15")),
+                "target_open": float(config[side].get("target_open", "1.1")),
+            }
+        if self.gripper_config:
+            parts = [
+                f"{side}(ID{cfg['sid']}) 张开={cfg['open_raw']} 闭合={cfg['closed_raw']}"
+                for side, cfg in self.gripper_config.items()
+            ]
+            print("[夹爪配置] 已加载: " + "; ".join(parts))
+        else:
+            print("[夹爪配置] 未找到有效端点，夹爪使用旧的 abs(角度)/9 归一化")
+
+    def _raw_to_relative_deg(self, sid: int, raw: int) -> float:
+        """原始值换算成与 filtered_angle 一致的相对角度（deg）。"""
+        zero = self.zero_offset_raw.get(sid, 0)
+        direction = self.direction.get(sid, 1)
+        return wrap_deg((raw - zero) * direction * 360.0 / self.encoder_resolution)
+
+    def _gripper_norm(self, side: str, deg: float) -> float:
+        """夹爪张开程度 0(闭合)~1(张开)；无配置时退回 abs(deg)/9。"""
+        cfg = self.gripper_config.get(side)
+        if not cfg:
+            return max(0.0, min(1.0, abs(deg) / 9.0))
+        closed_deg = self._raw_to_relative_deg(cfg["sid"], cfg["closed_raw"])
+        open_deg = self._raw_to_relative_deg(cfg["sid"], cfg["open_raw"])
+        span = open_deg - closed_deg
+        if abs(span) < 1e-6:
+            return max(0.0, min(1.0, abs(deg) / 9.0))
+        return max(0.0, min(1.0, (deg - closed_deg) / span))
+
+    def _gripper_target(self, side: str, norm: float) -> float:
+        """张开程度换算成 MIT 位置目标（rad）。"""
+        cfg = self.gripper_config.get(side)
+        if not cfg:
+            return -0.15 + norm * (1.1 - (-0.15))
+        closed_target = cfg["target_closed"]
+        open_target = cfg["target_open"]
+        return closed_target + norm * (open_target - closed_target)
 
     def gripper_enable_all(self):
         print("[夹爪]使能左夹爪电机")
@@ -770,12 +837,10 @@ class EncoderReader:
                     now = time.monotonic()
                     if self.gripper_teleop_enable and now >= self.next_gripper_cmd_time:
                         self.next_gripper_cmd_time = now + self.gripper_cmd_period
-                        q_l_norm = abs(grip_l_deg) / 9.0
-                        q_r_norm = abs(grip_r_deg) / 9.0
-                        q_l_norm =max(0.0,min(1.0,q_l_norm))
-                        q_r_norm =max(0.0,min(1.0,q_r_norm))
-                        q_l_target = -0.15 +q_l_norm *(1.1-(-0.15))
-                        q_r_target = -0.15 +q_r_norm *(1.1-(-0.15))
+                        q_l_norm = self._gripper_norm("left", grip_l_deg)
+                        q_r_norm = self._gripper_norm("right", grip_r_deg)
+                        q_l_target = self._gripper_target("left", q_l_norm)
+                        q_r_target = self._gripper_target("right", q_r_norm)
                         # MIT模式下发
                         self.gripper_ctrl.controlMIT(
                             self.motor_left_grip, self.grip_kp, self.grip_kd,
