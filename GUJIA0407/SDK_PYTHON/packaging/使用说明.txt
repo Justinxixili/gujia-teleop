@@ -1,0 +1,36 @@
+骨架摇操 / 舵机原点标定 便携版
+================================
+
+本文件夹内的文件请保持在一起，不要单独移动 exe：
+  GujiaTeleop.exe       骨架摇操控制台
+  OriginCalibration.exe 舵机原点标定工具
+  servo_config.ini      编码器零点/映射（只读）
+  gripper_config.ini    夹爪张开/闭合端点
+  teleop_config.ini     摇操参数
+  libGentoSDKPY.dll     机器人 SDK 动态库（Gento / 00040701 版本）
+  使用说明.txt
+
+一、GujiaTeleop.exe（骨架摇操）
+1. 双击启动前端界面；
+2. 填写机器人 IP、编码器串口、波特率，点“启动程序”；
+3. 对齐完成后可发送 Home / 开启遥操；
+4. 参数修改：编辑 teleop_config.ini、gripper_config.ini（重启程序生效）；
+   servo_config.ini 为编码器零点/映射，请勿在程序运行中修改。
+
+二、OriginCalibration.exe（舵机原点标定）
+1. 双击启动，选择编码器串口并连接；
+2. 逐个关节转到机械正/负限位，点“记正限位”“记负限位”；
+3. 程序按额定范围自动算原点，人工确认后“导出结果”；
+   四轴（A4/B4，ID 4/12）范围 -145°~+60°，正限位应显示约 +60°、负限位约 -145°；
+4. 标定程序不会修改 servo_config.ini，导出文件需人工核对后再合并；
+5. 关节额定范围可在 teleop_config.ini 的 [joint_range] 中配置，改完点“重读配置”。
+
+三、环境要求
+- Windows 10/11 64 位；
+- 相机功能需要 Intel RealSense 相机及驱动（建议安装 Intel RealSense SDK 2.0）；
+- 如提示缺少 VC++ 运行库，请安装 Microsoft Visual C++ 2015-2022 Redistributable (x64)；
+- 首次运行如被 SmartScreen 拦截：更多信息 → 仍要运行。
+
+四、安全提示
+- 遥操会使机械臂运动，请确保急停开关可用；
+- 首次使用请先在低速度、空载状态下测试。

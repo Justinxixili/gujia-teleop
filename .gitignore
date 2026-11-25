@@ -16,3 +16,11 @@ Thumbs.db
 GUJIA/SDK_PYTHON/release/
 GUJIA/SDK_PYTHON/packaging/_build/
 GUJIA/SDK_PYTHON/*.zip
+
+# 04 版工程（Gento SDK）打包产物
+GUJIA0407/SDK_PYTHON/release/
+GUJIA0407/SDK_PYTHON/packaging/_build/
+GUJIA0407/SDK_PYTHON/*.zip
+
+# 本地厂商 SDK 原始包（1GB+，不入库；工程已包含所需 SDK 文件）
+00040701/
